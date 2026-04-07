@@ -1,0 +1,12 @@
+.DS_Store
+vendor/ggml/build/
+vendor/espeak-ng/build/
+*.wav
+nimcache/
+nimble.paths
+nimble.develop
+bin/
+src/lib/
+src/include/
+src/res/data/espeak/
+src/res/models/
