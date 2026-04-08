@@ -6,7 +6,7 @@
 ##   tts_cli download kokoro-en
 ##   tts_cli models
 
-import std/[os, strutils, strformat, sequtils, json, algorithm, terminal]
+import std/[os, strutils, strformat, sequtils, json, algorithm, terminal, osproc]
 import tts/common
 import tts/engine
 import docopt
@@ -375,6 +375,14 @@ when isMainModule:
            "model": {"type": "string", "description": "Model name or shorthand"},
            "language": {"type": "string", "enum": ["en", "zh"], "description": "Filter by language"},
            "gender": {"type": "string", "enum": ["male", "female"], "description": "Filter by gender"}}}},
+      {"name": "speak", "description": "Speak text aloud through the system speakers. Streams audio per sentence for low latency. Returns after playback finishes.",
+       "inputSchema": {"type": "object",
+         "properties": {
+           "text": {"type": "string", "description": "Text to speak"},
+           "voice": {"type": "string", "description": "Voice name or mix", "default": "af_heart"},
+           "model": {"type": "string", "description": "Model name or shorthand", "default": "kokoro-en"},
+           "speed": {"type": "number", "description": "Speed multiplier", "default": 1.0}},
+         "required": ["text"]}},
       {"name": "models", "description": "List downloaded TTS models",
        "inputSchema": {"type": "object", "properties": {}}}
     ]
@@ -461,6 +469,33 @@ when isMainModule:
                   jsonModels.add %*{"model": name, "voices": jv}
                 eng.close()
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $jsonModels}]}))
+          elif toolName == "speak":
+            let text = toolArgs["text"].getStr()
+            let voiceSpec = toolArgs.getOrDefault("voice").getStr("af_heart")
+            let model = resolveModel(toolArgs.getOrDefault("model").getStr("kokoro-en"))
+            let speed = toolArgs.getOrDefault("speed").getFloat(1.0).float32
+            e.loadModel(model, voiceSpec)
+            let vp = parseVoice(voiceSpec)
+            var voice = vp.voice1
+            if vp.isMix:
+              voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
+            # Open audio player process — stream raw PCM to its stdin
+            # Synthesize to temp WAV, then play with afplay (macOS) or aplay (Linux)
+            let tmpWav = getTempDir() / "tts_speak_" & $getCurrentProcessId() & ".wav"
+            let audio = e.synthesize(text, voice, speed)
+            audio.writeWav(tmpWav)
+            let totalSamples = audio.samples.len
+            when defined(macosx):
+              let player = startProcess("afplay", args = @[tmpWav], options = {poUsePath})
+            else:
+              let player = startProcess("aplay", args = @[tmpWav], options = {poUsePath})
+            discard player.waitForExit()
+            player.close()
+            removeFile(tmpWav)
+            let dur = totalSamples.float / 24000.0
+            mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+              "spoken": true, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
+              "voice": voiceSpec, "samples": totalSamples})}]}))
           elif toolName == "models":
             var arr = newJArray()
             if dirExists(pkgModelDir):
