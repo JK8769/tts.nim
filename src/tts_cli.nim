@@ -535,16 +535,22 @@ when isMainModule:
             var voice = vp.voice1
             if vp.isMix:
               voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
-            let audio = e.synthesize(text, voice, speed)
-            # Direct playback via miniaudio — no temp files
+            # Streaming synthesis: play each sentence chunk as it's generated
             if speaker == nil:
-              speaker = newAudioPlayback(uint32(audio.sampleRate))
+              speaker = newAudioPlayback(24000)
               speaker.start()
-            speaker.writeAll(audio.samples)
-            let dur = audio.samples.len.float / audio.sampleRate.float
+            var totalSamples = 0
+            var firstChunkPlaying = false
+            let cb = proc(chunk: AudioOutput, index, total: int) {.closure.} =
+              speaker.writeAll(chunk.samples)
+              totalSamples += chunk.samples.len
+              if not firstChunkPlaying:
+                firstChunkPlaying = true
+            discard e.synthesize(text, voice, speed, cb)
+            let dur = totalSamples.float / 24000.0
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "playing": true, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
-              "voice": voiceSpec, "samples": audio.samples.len,
+              "voice": voiceSpec, "samples": totalSamples,
               "interrupted_previous": interrupted})}]}))
           elif toolName == "stop":
             let stopped = stopSpeaking()

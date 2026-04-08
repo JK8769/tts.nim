@@ -67,10 +67,13 @@ proc newConverseLoop*(ttsModel, whisperModel: string,
   )
 
 proc speak(cl: ConverseLoop, text: string) =
-  ## Synthesize and play text. Non-blocking write to speaker ring buffer.
+  ## Streaming synthesis: play each sentence chunk as it's generated.
+  ## First chunk starts playing while the rest are still being synthesized.
   if text.len == 0: return
-  let audio = cl.engine.synthesize(text, cl.config.voice, cl.config.speed)
-  cl.speaker.writeAll(audio.samples)
+  let speaker = cl.speaker
+  let cb = proc(chunk: AudioOutput, index, total: int) {.closure.} =
+    speaker.writeAll(chunk.samples)
+  discard cl.engine.synthesize(text, cl.config.voice, cl.config.speed, cb)
 
 proc bargeIn(cl: ConverseLoop) =
   ## Interrupt agent speech when user starts talking.
