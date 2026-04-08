@@ -36,11 +36,31 @@ tts_cli download kokoro-en        # download English model
 tts_cli download kokoro-zh        # download Chinese model
 ```
 
+### Voice mixing
+
+Blend two voices with a weight (0.0 = pure first, 1.0 = pure second):
+
+```bash
+tts_cli synth "Hello" -v "af_heart+am_adam:0.3"     # 70% af_heart, 30% am_adam
+tts_cli synth "Hello" -v "af_heart+bf_emma:0.5"     # 50/50 blend
+tts_cli synth "Hello" -v "af_heart+am_adam"          # default 50/50
+```
+
+### Streaming
+
+Stream raw PCM (s16le, 24kHz, mono) to stdout per sentence for low-latency playback:
+
+```bash
+tts_cli synth "First sentence. Second sentence." --stream | ffplay -f s16le -ar 24000 -ac 1 -nodisp -
+tts_cli synth "Long text..." --stream --json 2>meta.json | sox -t raw -r 24000 -b 16 -e signed -c 1 - out.wav
+```
+
 ### Batch synthesis
 
 ```bash
 tts_cli batch chapters.txt -d output/          # one WAV per line
 tts_cli batch script.txt -v am_adam --json      # JSON output for automation
+tts_cli batch book.txt -v "af_heart+bf_emma:0.4" -d audiobook/  # batch with voice mix
 ```
 
 ### Piping
@@ -49,6 +69,10 @@ tts_cli batch script.txt -v am_adam --json      # JSON output for automation
 echo "Hello from stdin" | tts_cli synth -                     # read text from stdin
 tts_cli synth "pipe me" --output - | ffplay -nodisp -         # WAV to stdout
 ```
+
+### Long text handling
+
+Long sentences are automatically split on clause boundaries (commas, semicolons, colons) when they exceed ~400 phoneme tokens. This prevents OOM errors and quality degradation on long inputs — just pass your text and the engine handles chunking.
 
 ### Agent / programmatic use
 

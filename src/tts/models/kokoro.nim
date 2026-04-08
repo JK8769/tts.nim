@@ -177,6 +177,7 @@ type
 
     # Voice embeddings
     voices*: Table[string, ptr GgmlTensor]
+    mixCtx*: ptr GgmlContext  ## Separate context for mixed voice tensors
 
     # Pre-computed constants
     harmonicSamplingNorm*: ptr GgmlTensor
@@ -627,6 +628,42 @@ proc postLoadInit*(model: var KokoroModel) =
 
   # Text encoder LSTM
   initLstmStates(model.textEncoder.outLstm, constCtx)
+
+# ── Voice Mixing ─────────────────────────────────────────────────
+
+proc mixVoice*(model: var KokoroModel, name1, name2: string,
+               weight: float32 = 0.5, mixName: string = ""): string =
+  ## Create a blended voice by interpolating two voice tensors.
+  ## weight=0.0 is pure voice1, weight=1.0 is pure voice2.
+  ## Returns the name of the mixed voice (registered in model.voices).
+  if name1 notin model.voices:
+    raise newException(ValueError, "voice not found: " & name1)
+  if name2 notin model.voices:
+    raise newException(ValueError, "voice not found: " & name2)
+  let v1 = model.voices[name1]
+  let v2 = model.voices[name2]
+  # Tensors must have same shape
+  if v1.ne[0] != v2.ne[0] or v1.ne[1] != v2.ne[1]:
+    raise newException(ValueError, "voice tensor shape mismatch: " &
+      name1 & " vs " & name2)
+  let resultName = if mixName.len > 0: mixName
+                   else: name1 & "+" & name2
+  # Allocate in a dedicated mix context (freed on next mix or close)
+  if model.mixCtx != nil:
+    ggml_free(model.mixCtx)
+  let mixMemSize = csize_t(int(v1.ne[0] * v1.ne[1]) * sizeof(float32) + 4096)
+  let mixParams = GgmlInitParams(mem_size: mixMemSize, mem_buffer: nil, no_alloc: false)
+  model.mixCtx = ggml_init(mixParams)
+  let mixed = ggml_new_tensor_2d(model.mixCtx, GGML_TYPE_F32, v1.ne[0], v1.ne[1])
+  let d1 = tensorData(v1)
+  let d2 = tensorData(v2)
+  let dm = tensorData(mixed)
+  let total = int(v1.ne[0] * v1.ne[1])
+  let w1 = 1.0'f32 - weight
+  for i in 0..<total:
+    dm[i] = w1 * d1[i] + weight * d2[i]
+  model.voices[resultName] = mixed
+  return resultName
 
 # ── Graph Building Helpers ───────────────────────────────────────
 
@@ -1432,11 +1469,81 @@ proc splitSentences(text: string): seq[(string, SplitKind)] =
   let s = cur.strip()
   if s.len > 0: result.add (s, skSentence)
 
+const MaxTokensPerChunk* = 400
+  ## Max phoneme tokens per synthesis chunk. Kokoro's position embeddings
+  ## support 512, but quality degrades past ~400. Long sentences are
+  ## auto-split on clause boundaries (commas, semicolons, colons).
+
+proc estimateTokens(model: KokoroModel, phmzr: Phonemizer, text: string): int =
+  ## Estimate token count without full synthesis. Returns wrapped token count.
+  let phonemes = phmzr.phonemize(normalizeForKokoro(text))
+  var clean = phonemes
+  while clean.len > 0 and clean[^1] in {'.', '!', '?', ':'}: clean.setLen(clean.len - 1)
+  clean = clean.strip()
+  if clean.len == 0: return 0
+  return model.tokenizer.tokenize(clean).len + 2  # +2 for BOS/EOS
+
+proc splitLongSentence(model: KokoroModel, phmzr: Phonemizer,
+                       text: string, maxTokens: int): seq[string] =
+  ## Split a sentence on clause boundaries if it exceeds maxTokens.
+  ## Splits on: comma+space, semicolon+space, colon+space, " — ", " - ".
+  if model.estimateTokens(phmzr, text) <= maxTokens:
+    return @[text]
+  # Find all clause boundaries
+  type SplitPoint = object
+    pos: int       # position in text (after the delimiter)
+    priority: int  # lower = split here first (semicolon > comma)
+  var points: seq[SplitPoint]
+  var i = 0
+  while i < text.len:
+    if i + 1 < text.len:
+      if text[i] == ';' and text[i+1] == ' ':
+        points.add SplitPoint(pos: i + 2, priority: 0)
+      elif text[i] == ':' and text[i+1] == ' ':
+        points.add SplitPoint(pos: i + 2, priority: 1)
+      elif text[i] == ',' and text[i+1] == ' ':
+        points.add SplitPoint(pos: i + 2, priority: 2)
+    if i + 2 < text.len and text[i] == ' ' and text[i+2] == ' ':
+      if text[i+1] in {'-'}: # " - "
+        points.add SplitPoint(pos: i + 3, priority: 1)
+    if i + 4 < text.len and text[i..i+4] == " \xe2\x80\x94 ": # " — "
+      points.add SplitPoint(pos: i + 5, priority: 1)
+    inc i
+  if points.len == 0:
+    # No clause boundaries — split on word boundaries at roughly the midpoint
+    let mid = text.len div 2
+    var best = mid
+    for j in max(0, mid - 50) .. min(text.len - 1, mid + 50):
+      if text[j] == ' ':
+        best = j + 1
+        break
+    return @[text[0..<best].strip(), text[best..^1].strip()]
+  # Binary split: find the split point closest to the middle
+  let mid = text.len div 2
+  var bestIdx = 0
+  var bestDist = abs(points[0].pos - mid)
+  for j in 1..<points.len:
+    let dist = abs(points[j].pos - mid)
+    if dist < bestDist or (dist == bestDist and points[j].priority < points[bestIdx].priority):
+      bestIdx = j
+      bestDist = dist
+  let splitPos = points[bestIdx].pos
+  let left = text[0..<splitPos].strip()
+  let right = text[splitPos..^1].strip()
+  # Recurse: each half may still be too long
+  result = model.splitLongSentence(phmzr, left, maxTokens)
+  result.add model.splitLongSentence(phmzr, right, maxTokens)
+
+type SynthCallback* = proc(chunk: AudioOutput, index, total: int) {.gcsafe.}
+  ## Callback invoked per sentence chunk during streaming synthesis.
+
 proc synthesize*(model: KokoroModel, text: string,
-                 voice: string = "af_maple", speed: float32 = 1.0): AudioOutput =
+                 voice: string = "af_maple", speed: float32 = 1.0,
+                 callback: SynthCallback = nil): AudioOutput =
   ## Full Kokoro TTS pipeline: text → phonemes → tokens → duration → generation → audio.
   ## Normalizes punctuation (CJK → ASCII), splits on sentence boundaries,
-  ## and inserts silence between sentences (7x pause = 350ms).
+  ## auto-splits long sentences on clause boundaries, and inserts silence between chunks.
+  ## If callback is provided, it's called per chunk for streaming.
   let cfg = model.config
 
   # Pick phonemizer based on voice language (first char)
@@ -1447,30 +1554,44 @@ proc synthesize*(model: KokoroModel, text: string,
     model.phmzr
 
   let normalized = normalizePunctuation(text)
-  let splits = splitSentences(normalized)
+  let sentenceSplits = splitSentences(normalized)
 
-  if splits.len == 0:
+  if sentenceSplits.len == 0:
     return AudioOutput(samples: @[], sampleRate: int32(cfg.sampleRate), channels: 1)
 
-  # Silence durations: sentence boundary = 350ms, ellipsis = 500ms
+  # Auto-split long sentences into chunks that fit within token limits
+  var chunks: seq[(string, SplitKind)]
+  for (sentence, kind) in sentenceSplits:
+    let parts = model.splitLongSentence(phmzr, sentence, MaxTokensPerChunk)
+    for j, part in parts:
+      let k = if j == parts.len - 1: kind else: skSentence
+      chunks.add (part, k)
+
+  # Silence durations: sentence boundary = 350ms, ellipsis = 500ms, clause = 200ms
   let sr = float32(cfg.sampleRate)
   let sentenceSilence = int(0.35 * sr)
   let ellipsisSilence = int(0.5 * sr)
+  let clauseSilence = int(0.2 * sr)
   var allSamples: seq[float32]
 
-  for i, (sentence, kind) in splits:
-    let audio = model.synthesizeSentence(phmzr, sentence, voice, speed)
+  for i, (chunk, kind) in chunks:
+    let audio = model.synthesizeSentence(phmzr, chunk, voice, speed)
     if audio.samples.len > 0:
       if allSamples.len > 0:
-        # Use previous split's kind to determine gap before this segment
-        let gap = if splits[i-1][1] == skEllipsis: ellipsisSilence
-                  else: sentenceSilence
+        let gap = if i > 0 and chunks[i-1][1] == skEllipsis: ellipsisSilence
+                  elif kind == skSentence and i > 0: sentenceSilence
+                  else: clauseSilence
         allSamples.setLen(allSamples.len + gap)
       allSamples.add audio.samples
+      if callback != nil:
+        callback(audio, i, chunks.len)
 
   return AudioOutput(samples: allSamples, sampleRate: int32(cfg.sampleRate), channels: 1)
 
 proc close*(model: var KokoroModel) =
+  if model.mixCtx != nil:
+    ggml_free(model.mixCtx)
+    model.mixCtx = nil
   if model.constCtx != nil:
     ggml_free(model.constCtx)
     model.constCtx = nil

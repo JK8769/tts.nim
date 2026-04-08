@@ -3,6 +3,7 @@
 
 import common
 import models/kokoro
+export SynthCallback
 
 type
   TTSEngine* = ref object
@@ -34,10 +35,19 @@ proc listVoices*(e: TTSEngine): seq[string] =
   return e.kokoro.listVoices()
 
 proc synthesize*(e: TTSEngine, text: string, voice: string = "af_heart",
-                 speed: float32 = 1.0): AudioOutput =
+                 speed: float32 = 1.0,
+                 callback: SynthCallback = nil): AudioOutput =
   if not e.loaded:
     raise newException(ValueError, "No model loaded. Call loadModel() first.")
-  e.kokoro.synthesize(text, voice, speed)
+  e.kokoro.synthesize(text, voice, speed, callback)
+
+proc mixVoice*(e: TTSEngine, voice1, voice2: string,
+               weight: float32 = 0.5, name: string = ""): string =
+  ## Blend two voices. Returns the mixed voice name.
+  ## weight=0.0 is pure voice1, weight=1.0 is pure voice2.
+  if not e.loaded:
+    raise newException(ValueError, "No model loaded. Call loadModel() first.")
+  e.kokoro.mixVoice(voice1, voice2, weight, name)
 
 proc close*(e: TTSEngine) =
   if e.loaded:

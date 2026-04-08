@@ -15,7 +15,7 @@ const Doc = """
 tts_cli — Native TTS engine for Nim.
 
 Usage:
-  tts_cli synth <text>... [-m <model>] [-v <voice>] [-s <speed>] [-o <output>] [--json]
+  tts_cli synth <text>... [-m <model>] [-v <voice>] [-s <speed>] [-o <output>] [--json] [--stream]
   tts_cli batch <input> [-m <model>] [-v <voice>] [-s <speed>] [-d <dir>] [--json]
   tts_cli voices [-m <model>] [--male] [--female] [--en] [--zh] [--json]
   tts_cli download [<name>]
@@ -26,9 +26,10 @@ Usage:
 
 Options:
   -m, --model <model>    Model file or shorthand (kokoro-en, kokoro-zh) [default: kokoro-en-q5.gguf].
-  -v, --voice <voice>    Voice name [default: af_heart].
+  -v, --voice <voice>    Voice name, or mix: voice1+voice2:weight [default: af_heart].
   -s, --speed <speed>    Speed multiplier [default: 1.0].
-  -o, --output <output>  Output WAV file, or - for stdout [default: output.wav].
+  -o, --output <output>  Output WAV file, or - for stdout/raw PCM [default: output.wav].
+  --stream               Stream raw PCM (s16le, 24kHz, mono) to stdout per sentence.
   -d, --dir <dir>        Output directory for batch mode [default: .].
   --male                 Show only male voices.
   --female               Show only female voices.
@@ -138,6 +139,20 @@ proc voiceGender(v: string): string =
     else: discard
   return "unknown"
 
+proc parseVoice(spec: string): tuple[voice1, voice2: string, weight: float32, isMix: bool] =
+  ## Parse voice spec: "af_heart" or "af_heart+am_adam:0.3"
+  let plusIdx = spec.find('+')
+  if plusIdx < 0:
+    return (spec, "", 0.0'f32, false)
+  let v1 = spec[0..<plusIdx]
+  let rest = spec[plusIdx + 1 .. ^1]
+  let colonIdx = rest.find(':')
+  if colonIdx < 0:
+    return (v1, rest, 0.5'f32, true)
+  let v2 = rest[0..<colonIdx]
+  let w = parseFloat(rest[colonIdx + 1 .. ^1]).float32
+  return (v1, v2, w, true)
+
 proc die(msg: string, asJson: bool, code = 1) =
   if asJson:
     stderr.writeLine((%*{"error": msg}).pretty)
@@ -164,37 +179,69 @@ when isMainModule:
     let text = if rawText == "-": stdin.readAll().strip() else: rawText
     if text.len == 0: die("no text provided", jsonOut)
     let model = resolveModel($args["--model"])
-    let voice = $args["--voice"]
+    let voiceSpec = $args["--voice"]
     let speed = parseFloat($args["--speed"]).float32
     let output = $args["--output"]
+    let stream = args["--stream"]
     var e = newTTSEngine()
     try:
-      e.loadModel(model, voice)
+      e.loadModel(model, voiceSpec)
     except CatchableError as ex:
       die("failed to load model '" & model & "': " & ex.msg, jsonOut)
-    let voices = e.listVoices()
-    if voice notin voices:
-      die("voice '" & voice & "' not found in model '" & model & "'", jsonOut)
-    let audio = e.synthesize(text, voice, speed)
-    if output == "-":
-      audio.writeWav(stdout)
+    # Parse voice mix syntax: "af_heart+am_adam:0.3"
+    let vp = parseVoice(voiceSpec)
+    var voice = vp.voice1
+    if vp.isMix:
+      let allVoices = e.listVoices()
+      if vp.voice1 notin allVoices:
+        die("voice '" & vp.voice1 & "' not found", jsonOut)
+      if vp.voice2 notin allVoices:
+        die("voice '" & vp.voice2 & "' not found", jsonOut)
+      voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
     else:
-      audio.writeWav(output)
-    let dur = audio.samples.len.float / audio.sampleRate.float
-    if output != "-":
+      let allVoices = e.listVoices()
+      if voice notin allVoices:
+        die("voice '" & voice & "' not found in model '" & model & "'", jsonOut)
+    # Streaming: write raw PCM (s16le) to stdout per sentence
+    if stream:
+      var totalSamples = 0
+      let cb = proc(chunk: AudioOutput, index, total: int) {.gcsafe.} =
+        var buf = newSeq[int16](chunk.samples.len)
+        for i, s in chunk.samples:
+          let clamped = max(-1.0'f32, min(1.0'f32, s))
+          buf[i] = int16(clamped * 32767.0'f32)
+        if buf.len > 0:
+          discard stdout.writeBuffer(addr buf[0], buf.len * 2)
+          stdout.flushFile()
+        totalSamples += chunk.samples.len
+      discard e.synthesize(text, voice, speed, cb)
       if jsonOut:
-        echo (%*{
-          "output": output,
-          "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
-          "sample_rate": audio.sampleRate,
-          "samples": audio.samples.len,
-          "voice": voice,
-          "model": model,
-          "speed": speed,
-          "size_bytes": getFileSize(output),
-        }).pretty
+        stderr.writeLine((%*{
+          "sample_rate": 24000, "channels": 1, "format": "s16le",
+          "samples": totalSamples,
+          "duration": (totalSamples.float / 24000.0).formatFloat(ffDecimal, 2).parseFloat,
+        }).pretty)
+    else:
+      let audio = e.synthesize(text, voice, speed)
+      if output == "-":
+        audio.writeWav(stdout)
       else:
-        echo "Audio: ", dur.formatFloat(ffDecimal, 1), "s → ", output
+        audio.writeWav(output)
+      let dur = audio.samples.len.float / audio.sampleRate.float
+      if output != "-":
+        if jsonOut:
+          echo (%*{
+            "output": output,
+            "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
+            "sample_rate": audio.sampleRate,
+            "samples": audio.samples.len,
+            "voice": voiceSpec,
+            "model": model,
+            "speed": speed,
+            "size_bytes": getFileSize(output),
+          }).pretty
+        else:
+          echo "Audio: ", dur.formatFloat(ffDecimal, 1), "s → ", output
     e.close()
 
   elif args.isCommand("voices"):
@@ -237,16 +284,20 @@ when isMainModule:
   elif args.isCommand("batch"):
     let inputFile = $args["<input>"]
     let model = resolveModel($args["--model"])
-    let voice = $args["--voice"]
+    let voiceSpec = $args["--voice"]
     let speed = parseFloat($args["--speed"]).float32
     let outDir = $args["--dir"]
     if not fileExists(inputFile): die("file not found: " & inputFile, jsonOut)
     createDir(outDir)
     var e = newTTSEngine()
     try:
-      e.loadModel(model, voice)
+      e.loadModel(model, voiceSpec)
     except CatchableError as ex:
       die("failed to load model '" & model & "': " & ex.msg, jsonOut)
+    let vp = parseVoice(voiceSpec)
+    var voice = vp.voice1
+    if vp.isMix:
+      voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
     let lines = readFile(inputFile).strip().splitLines()
     var results = newJArray()
     var count = 0
