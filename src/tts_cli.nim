@@ -335,6 +335,34 @@ when isMainModule:
     try: e.loadModel(defaultModel, "af_heart")
     except: discard
 
+    var speakPlayer: Process = nil
+    var speakTmpWav: string = ""
+
+    proc cleanupSpeaker() =
+      ## Clean up player process and temp file if playback finished naturally.
+      if speakPlayer != nil and speakPlayer.peekExitCode() != -1:
+        speakPlayer.close()
+        speakPlayer = nil
+        if speakTmpWav.len > 0 and fileExists(speakTmpWav):
+          removeFile(speakTmpWav)
+          speakTmpWav = ""
+
+    proc stopSpeaking(): bool =
+      ## Kill any active speak playback. Returns true if something was stopped.
+      if speakPlayer != nil:
+        let wasPlaying = speakPlayer.peekExitCode() == -1
+        try:
+          if wasPlaying: speakPlayer.terminate()
+          discard speakPlayer.waitForExit()
+          speakPlayer.close()
+        except: discard
+        speakPlayer = nil
+        if speakTmpWav.len > 0 and fileExists(speakTmpWav):
+          removeFile(speakTmpWav)
+          speakTmpWav = ""
+        return wasPlaying
+      return false
+
     proc mcpSend(j: JsonNode) =
       let s = $j
       stdout.write("Content-Length: " & $s.len & "\r\n\r\n" & s)
@@ -375,7 +403,7 @@ when isMainModule:
            "model": {"type": "string", "description": "Model name or shorthand"},
            "language": {"type": "string", "enum": ["en", "zh"], "description": "Filter by language"},
            "gender": {"type": "string", "enum": ["male", "female"], "description": "Filter by gender"}}}},
-      {"name": "speak", "description": "Speak text aloud through the system speakers. Streams audio per sentence for low latency. Returns after playback finishes.",
+      {"name": "speak", "description": "Speak text aloud through the system speakers. Interrupts any previous speech automatically. Returns after playback finishes.",
        "inputSchema": {"type": "object",
          "properties": {
            "text": {"type": "string", "description": "Text to speak"},
@@ -383,11 +411,14 @@ when isMainModule:
            "model": {"type": "string", "description": "Model name or shorthand", "default": "kokoro-en"},
            "speed": {"type": "number", "description": "Speed multiplier", "default": 1.0}},
          "required": ["text"]}},
+      {"name": "stop", "description": "Stop any speech currently playing. No-op if nothing is playing.",
+       "inputSchema": {"type": "object", "properties": {}}},
       {"name": "models", "description": "List downloaded TTS models",
        "inputSchema": {"type": "object", "properties": {}}}
     ]
 
     while true:
+      cleanupSpeaker()
       let req = mcpRecv()
       if req == nil: break
       let id = req.getOrDefault("id")
@@ -470,6 +501,8 @@ when isMainModule:
                 eng.close()
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $jsonModels}]}))
           elif toolName == "speak":
+            # Interrupt any previous playback first
+            let interrupted = stopSpeaking()
             let text = toolArgs["text"].getStr()
             let voiceSpec = toolArgs.getOrDefault("voice").getStr("af_heart")
             let model = resolveModel(toolArgs.getOrDefault("model").getStr("kokoro-en"))
@@ -479,23 +512,24 @@ when isMainModule:
             var voice = vp.voice1
             if vp.isMix:
               voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
-            # Open audio player process — stream raw PCM to its stdin
-            # Synthesize to temp WAV, then play with afplay (macOS) or aplay (Linux)
-            let tmpWav = getTempDir() / "tts_speak_" & $getCurrentProcessId() & ".wav"
+            speakTmpWav = getTempDir() / "tts_speak_" & $getCurrentProcessId() & ".wav"
             let audio = e.synthesize(text, voice, speed)
-            audio.writeWav(tmpWav)
+            audio.writeWav(speakTmpWav)
             let totalSamples = audio.samples.len
+            # Start playback in background — don't block the MCP server
             when defined(macosx):
-              let player = startProcess("afplay", args = @[tmpWav], options = {poUsePath})
+              speakPlayer = startProcess("afplay", args = @[speakTmpWav], options = {poUsePath})
             else:
-              let player = startProcess("aplay", args = @[tmpWav], options = {poUsePath})
-            discard player.waitForExit()
-            player.close()
-            removeFile(tmpWav)
+              speakPlayer = startProcess("aplay", args = @[speakTmpWav], options = {poUsePath})
             let dur = totalSamples.float / 24000.0
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
-              "spoken": true, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
-              "voice": voiceSpec, "samples": totalSamples})}]}))
+              "playing": true, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
+              "voice": voiceSpec, "samples": totalSamples,
+              "interrupted_previous": interrupted})}]}))
+          elif toolName == "stop":
+            let stopped = stopSpeaking()
+            mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+              "stopped": stopped})}]}))
           elif toolName == "models":
             var arr = newJArray()
             if dirExists(pkgModelDir):
