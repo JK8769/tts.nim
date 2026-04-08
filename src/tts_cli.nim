@@ -366,9 +366,7 @@ when isMainModule:
   elif args.isCommand("serve"):
     # MCP stdio server — JSON-RPC over stdin/stdout with Content-Length framing
     var e = newTTSEngine()
-    let defaultModel = resolveModel("kokoro-en")
-    try: e.loadModel(defaultModel, "af_heart")
-    except: discard
+    # Model loaded lazily on first synth/speak call for fast MCP startup
 
     var speaker: AudioPlayback = nil
 
@@ -387,7 +385,11 @@ when isMainModule:
     proc mcpRecv(): JsonNode =
       var contentLen = 0
       while true:
-        let line = stdin.readLine().strip()
+        var line: string
+        try:
+          line = stdin.readLine().strip()
+        except EOFError:
+          return nil
         if line.len == 0: break
         if line.startsWith("Content-Length:"):
           contentLen = parseInt(line[15..^1].strip())
@@ -549,8 +551,10 @@ when isMainModule:
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "stopped": stopped})}]}))
           elif toolName == "listen":
-            # Interrupt any playing speech, then listen on mic until user stops talking
-            discard stopSpeaking()
+            # Mic-mute gate: wait for playback to finish before opening mic
+            # This prevents echo (mic hearing the speakers)
+            if speaker != nil and not speaker.isIdle:
+              speaker.waitUntilDone()
             let whisperModelName = toolArgs.getOrDefault("whisper_model").getStr("ggml-base.en.bin")
             let language = toolArgs.getOrDefault("language").getStr("en")
             let timeoutMs = toolArgs.getOrDefault("timeout_ms").getInt(10000)

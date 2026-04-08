@@ -99,12 +99,16 @@ proc run*(cl: ConverseLoop, onTurn: ResponseCallback) =
       sleep(5)
       continue
 
+    # Mic-mute gate: discard mic input while agent is speaking to prevent echo
+    if not cl.speaker.isIdle:
+      cl.vadInst.reset()
+      speechBuf = @[]
+      continue
+
     let event = cl.vadInst.processFrame(frame[0..<got])
 
     case event
     of veSpeechStart:
-      # User started talking — barge in on any agent speech
-      bargeIn(cl)
       # Include the pre-speech padding
       let pad = cl.vadInst.drainPad()
       speechBuf = pad & frame[0..<got]
