@@ -12,6 +12,7 @@ installFiles  = @["tts.nim"]
 # Dependencies
 requires "nim >= 2.0.0"
 requires "zippy >= 0.10.0"
+requires "https://github.com/JK8769/docopt.nim >= 0.8.0"
 
 proc buildGgml() =
   let root = thisDir()

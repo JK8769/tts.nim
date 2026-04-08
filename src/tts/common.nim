@@ -36,14 +36,11 @@ proc writeLE32(f: File, v: int32) =
   var val = v
   discard f.writeBuffer(addr val, 4)
 
-proc writeWav*(output: AudioOutput, path: string) =
-  ## Write AudioOutput to a WAV file (16-bit PCM)
+proc writeWav*(output: AudioOutput, f: File) =
+  ## Write AudioOutput as WAV (16-bit PCM) to an open File handle.
   let numSamples = output.samples.len
   let dataSize = int32(numSamples * 2)
   let fileSize = int32(36 + dataSize)
-
-  var f = open(path, fmWrite)
-  defer: f.close()
 
   # RIFF header
   f.write("RIFF")
@@ -70,3 +67,9 @@ proc writeWav*(output: AudioOutput, path: string) =
     buf[i] = int16(clamped * 32767.0'f32)
   if numSamples > 0:
     discard f.writeBuffer(addr buf[0], numSamples * 2)
+
+proc writeWav*(output: AudioOutput, path: string) =
+  ## Write AudioOutput to a WAV file (16-bit PCM).
+  var f = open(path, fmWrite)
+  defer: f.close()
+  output.writeWav(f)
