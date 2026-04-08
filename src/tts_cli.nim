@@ -360,11 +360,11 @@ when isMainModule:
       %*{"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": msg}}
 
     let tools = %*[
-      {"name": "synth", "description": "Synthesize speech from text and return a WAV file",
+      {"name": "synth", "description": "Synthesize speech from text and return a WAV file. Supports voice mixing (voice1+voice2:weight) and returns per-sentence timing chunks.",
        "inputSchema": {"type": "object",
          "properties": {
            "text": {"type": "string", "description": "Text to synthesize"},
-           "voice": {"type": "string", "description": "Voice name", "default": "af_heart"},
+           "voice": {"type": "string", "description": "Voice name or mix (e.g. af_heart+am_adam:0.3)", "default": "af_heart"},
            "model": {"type": "string", "description": "Model name or shorthand", "default": "kokoro-en"},
            "speed": {"type": "number", "description": "Speed multiplier", "default": 1.0},
            "output": {"type": "string", "description": "Output WAV path", "default": "output.wav"}},
@@ -404,18 +404,37 @@ when isMainModule:
         try:
           if toolName == "synth":
             let text = toolArgs["text"].getStr()
-            let voice = toolArgs.getOrDefault("voice").getStr("af_heart")
+            let voiceSpec = toolArgs.getOrDefault("voice").getStr("af_heart")
             let model = resolveModel(toolArgs.getOrDefault("model").getStr("kokoro-en"))
             let speed = toolArgs.getOrDefault("speed").getFloat(1.0).float32
             let output = toolArgs.getOrDefault("output").getStr("output.wav")
-            e.loadModel(model, voice)
-            let audio = e.synthesize(text, voice, speed)
+            e.loadModel(model, voiceSpec)
+            # Handle voice mixing
+            let vp = parseVoice(voiceSpec)
+            var voice = vp.voice1
+            if vp.isMix:
+              voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
+            # Collect per-sentence chunk timing
+            var chunks = newJArray()
+            var sampleOffset = 0
+            let sr = 24000.0
+            let cb = proc(chunk: AudioOutput, index, total: int) {.closure.} =
+              let chunkDur = chunk.samples.len.float / sr
+              chunks.add %*{
+                "index": index,
+                "start": (sampleOffset.float / sr).formatFloat(ffDecimal, 3).parseFloat,
+                "duration": chunkDur.formatFloat(ffDecimal, 3).parseFloat,
+                "samples": chunk.samples.len,
+              }
+              sampleOffset += chunk.samples.len
+            let audio = e.synthesize(text, voice, speed, cb)
             audio.writeWav(output)
             let dur = audio.samples.len.float / audio.sampleRate.float
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "output": output, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
-              "sample_rate": audio.sampleRate, "voice": voice, "model": model,
-              "size_bytes": getFileSize(output)})}]}))
+              "sample_rate": audio.sampleRate, "voice": voiceSpec, "model": model,
+              "size_bytes": getFileSize(output),
+              "chunks": chunks})}]}))
           elif toolName == "voices":
             let model = resolveModel(toolArgs.getOrDefault("model").getStr(""))
             let wantEn = toolArgs.getOrDefault("language").getStr("") == "en"

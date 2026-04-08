@@ -1534,7 +1534,7 @@ proc splitLongSentence(model: KokoroModel, phmzr: Phonemizer,
   result = model.splitLongSentence(phmzr, left, maxTokens)
   result.add model.splitLongSentence(phmzr, right, maxTokens)
 
-type SynthCallback* = proc(chunk: AudioOutput, index, total: int) {.gcsafe.}
+type SynthCallback* = proc(chunk: AudioOutput, index, total: int)
   ## Callback invoked per sentence chunk during streaming synthesis.
 
 proc synthesize*(model: KokoroModel, text: string,
