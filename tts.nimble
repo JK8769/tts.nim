@@ -77,6 +77,29 @@ proc downloadModel(name, file: string) =
   exec "curl -L --progress-bar --fail -o " & dest &
        " https://github.com/" & repo & "/releases/latest/download/" & file
 
+proc buildWhisper() =
+  let root = thisDir()
+  let whisperSrc = root & "/vendor/whisper.cpp"
+  let buildDir = whisperSrc & "/build"
+  let libDir = root & "/src/lib/whisper"
+  mkDir buildDir
+  mkDir libDir
+
+  var args = "-DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON " &
+             "-DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=OFF"
+  if hostOS == "macosx":
+    args &= " -DGGML_METAL=ON -DGGML_ACCELERATE=ON -DGGML_BLAS=ON -DGGML_BLAS_VENDOR=Apple"
+  else:
+    args &= " -DGGML_METAL=OFF"
+
+  exec "cmake -S " & whisperSrc & " -B " & buildDir & " " & args
+  exec "cmake --build " & buildDir & " --config Release -j4"
+  # Copy shared libs
+  exec "find " & buildDir & " -name 'libwhisper*.dylib' -o -name 'libwhisper*.so*' | " &
+       "xargs -I{} cp -P {} " & libDir & "/"
+  exec "find " & buildDir & " -name 'libggml*.dylib' -o -name 'libggml*.so*' | " &
+       "xargs -I{} cp -P {} " & libDir & "/"
+
 proc stageHeaders() =
   ## Copy vendor headers into src/include/ so nimble installDirs picks them up.
   let root = thisDir()
@@ -85,20 +108,34 @@ proc stageHeaders() =
   exec "cp -r " & root & "/vendor/ggml/include/. " & incDir & "/"
   exec "cp -r " & root & "/vendor/espeak-ng/src/include/. " & incDir & "/"
 
+proc downloadWhisperModel(name, file: string) =
+  let dest = thisDir() & "/src/res/models/" & file
+  if fileExists(dest):
+    echo name & " ✓"
+    return
+  mkDir thisDir() & "/src/res/models"
+  echo "Downloading " & name & "..."
+  exec "curl -L --progress-bar --fail -o " & dest &
+       " https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" & file
+
 before install:
   buildGgml()
   buildEspeakNg()
+  buildWhisper()
   downloadModel("kokoro-en", "kokoro-en-q5.gguf")
   downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
+  downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
   stageHeaders()
 
-task build_deps, "Build ggml and espeak-ng from vendor source":
+task build_deps, "Build ggml, espeak-ng, and whisper.cpp from vendor source":
   buildGgml()
   buildEspeakNg()
+  buildWhisper()
 
-task download, "Download default TTS models":
+task download, "Download default TTS and STT models":
   downloadModel("kokoro-en", "kokoro-en-q5.gguf")
   downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
+  downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
 
 proc basename(path: string): string =
   let i = path.rfind('/')

@@ -1,10 +1,12 @@
 # tts.nim
 
-Native text-to-speech engine for Nim. Uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) via [ggml](https://github.com/ggerganov/ggml) for inference. No Python, no ONNX, no runtime dependencies -- just C and Nim.
+Native text-to-speech and speech-to-text engine for Nim. Uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) for TTS and [Whisper](https://github.com/ggerganov/whisper.cpp) for STT, both via [ggml](https://github.com/ggerganov/ggml). No Python, no ONNX -- just C and Nim.
 
 - 54+ voices across 9 languages (English, Chinese, Spanish, French, Hindi, Italian, Japanese, Portuguese, + more via espeak-ng)
-- ~200MB quantized models (Q5)
+- ~200MB quantized TTS models (Q5), ~140MB Whisper base model
 - Metal acceleration on macOS, CPU on Linux
+- Direct audio I/O via [miniaudio](https://miniaud.io/) (playback + mic capture)
+- Voice activity detection for hands-free conversation
 - Vendored espeak-ng for phonemization (statically linked, zero system deps)
 - Native Bopomofo phonemizer for Chinese
 
@@ -104,9 +106,25 @@ tts_cli schema --per-command     # per-command schemas (each subcommand isolated
 
 Per-command schema gives each usage pattern its own tool definition with only relevant parameters — **5-20x fewer tokens** per LLM request compared to the flat schema.
 
+### Conversation mode
+
+Talk to your computer with voice — mic capture, VAD, Whisper STT, and TTS in a live loop:
+
+```bash
+tts_cli converse                                     # default: English, af_heart voice
+tts_cli converse -v am_adam --lang en                 # male voice
+tts_cli converse --greeting "Hi, how can I help?"     # agent greeting
+tts_cli converse --whisper ggml-base.en.bin           # specify whisper model
+```
+
+The conversation loop handles turn-taking automatically:
+- **Barge-in**: start talking while the agent is speaking and it stops immediately
+- **VAD**: energy-based voice activity detection with holdoff to avoid false triggers
+- **Echo mode**: by default, the agent echoes back what you said (plug in an LLM for real conversation)
+
 ### MCP server
 
-`tts_cli serve` runs an [MCP](https://modelcontextprotocol.io/) server over stdio, exposing `synth`, `voices`, and `models` as tools:
+`tts_cli serve` runs an [MCP](https://modelcontextprotocol.io/) server over stdio, exposing `synth`, `speak`, `stop`, `listen`, `voices`, and `models` as tools:
 
 ```json
 // claude_desktop_config.json or any MCP client config
@@ -116,6 +134,14 @@ Per-command schema gives each usage pattern its own tool definition with only re
   }
 }
 ```
+
+MCP tools:
+- **synth** — synthesize to WAV file (with chunk timing)
+- **speak** — play text through speakers (non-blocking, auto-interrupts previous)
+- **stop** — silence any playing speech
+- **listen** — record from mic until user stops talking, return transcribed text
+- **voices** — list available voices with language/gender metadata
+- **models** — list downloaded models
 
 ## Install
 
@@ -176,11 +202,19 @@ nimble lang remove es             # remove Spanish
 ```
 src/
   tts.nim                         # library entry point
-  tts_cli.nim                     # CLI binary (docopt + MCP server)
+  tts_cli.nim                     # CLI binary (docopt + MCP server + converse)
   tts/
     common.nim                    # AudioOutput, WAV writer, path utils
     engine.nim                    # TTSEngine API
+    converse.nim                  # conversation loop (mic → VAD → STT → TTS → speaker)
     tokenizer.nim                 # phoneme string -> token IDs
+    audio/
+      device.nim                  # miniaudio playback + capture (ring buffer)
+      vad.nim                     # voice activity detection (energy-based)
+      ma_bridge.{c,h}            # C bridge for miniaudio
+    stt/
+      whisper.nim                 # Whisper STT via whisper.cpp (shared lib)
+      whisper_bridge.{c,h}       # C bridge for whisper.cpp
     ggml/
       ggml_bindings.nim           # ggml C FFI
       gguf_loader.nim             # GGUF model file loader
@@ -193,6 +227,8 @@ src/
 vendor/
   ggml/                           # ggml submodule (mmwillet fork, support-for-tts)
   espeak-ng/                      # espeak-ng submodule
+  whisper.cpp/                    # whisper.cpp submodule (built as shared lib)
+  miniaudio/                      # miniaudio single-header audio library
 ```
 
 ## Models

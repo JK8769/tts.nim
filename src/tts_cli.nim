@@ -10,6 +10,9 @@ import std/[os, strutils, strformat, sequtils, json, algorithm, terminal]
 import tts/common
 import tts/engine
 import tts/audio/device
+import tts/audio/vad
+import tts/stt/whisper
+import tts/converse
 import docopt
 
 const Doc = """
@@ -21,6 +24,7 @@ Usage:
   tts_cli voices [-m <model>] [--male] [--female] [--en] [--zh] [--json]
   tts_cli download [<name>]
   tts_cli models [--json]
+  tts_cli converse [-m <model>] [-v <voice>] [-s <speed>] [--whisper <wmodel>] [--lang <lang>] [--greeting <text>]
   tts_cli serve
   tts_cli schema [--per-command]
   tts_cli (-h | --help)
@@ -38,6 +42,9 @@ Options:
   --zh                   Show only Chinese voices.
   --json                 Output as JSON (for agent/programmatic use).
   --per-command           Output per-command schema.
+  --whisper <wmodel>     Whisper model for speech recognition [default: ggml-base.en.bin].
+  --lang <lang>          Language for speech recognition [default: en].
+  --greeting <text>      Greeting spoken at conversation start.
   -h, --help             Show this help.
 """
 
@@ -329,6 +336,33 @@ when isMainModule:
     if not jsonOut: echo "Models dir: ", pkgModelDir
     listModels(jsonOut)
 
+  elif args.isCommand("converse"):
+    let model = resolveModel($args["--model"])
+    let voiceSpec = $args["--voice"]
+    let speed = parseFloat($args["--speed"]).float32
+    let whisperModel = $args["--whisper"]
+    let lang = $args["--lang"]
+    let greeting = if args["--greeting"]: $args["--greeting"] else: ""
+    var config = defaultConverseConfig()
+    config.voice = voiceSpec
+    config.speed = speed
+    config.language = lang
+    config.greeting = greeting
+    echo "Starting conversation (speak to begin, Ctrl+C to exit)..."
+    echo "  TTS model: ", model, " | Voice: ", voiceSpec
+    echo "  Whisper model: ", whisperModel, " | Language: ", lang
+    var cl = newConverseLoop(model, whisperModel, config)
+    cl.run(proc(turn: ConverseTurn): string =
+      if turn.kind == ctUserSpeech:
+        echo "You: ", turn.text
+        # Echo mode — repeat back what was said (replace with LLM later)
+        let response = "You said: " & turn.text
+        echo "Agent: ", response
+        return response
+      return ""
+    )
+    cl.close()
+
   elif args.isCommand("serve"):
     # MCP stdio server — JSON-RPC over stdin/stdout with Content-Length framing
     var e = newTTSEngine()
@@ -395,6 +429,12 @@ when isMainModule:
          "required": ["text"]}},
       {"name": "stop", "description": "Stop any speech currently playing. No-op if nothing is playing.",
        "inputSchema": {"type": "object", "properties": {}}},
+      {"name": "listen", "description": "Listen on the microphone until the user stops speaking. Returns transcribed text. Automatically interrupts any playing speech. Uses VAD for speech detection and Whisper for transcription.",
+       "inputSchema": {"type": "object",
+         "properties": {
+           "whisper_model": {"type": "string", "description": "Whisper model file", "default": "ggml-base.en.bin"},
+           "language": {"type": "string", "description": "Language code (en, zh, auto)", "default": "en"},
+           "timeout_ms": {"type": "integer", "description": "Max silence before giving up (ms)", "default": 10000}}}},
       {"name": "models", "description": "List downloaded TTS models",
        "inputSchema": {"type": "object", "properties": {}}}
     ]
@@ -508,6 +548,54 @@ when isMainModule:
             let stopped = stopSpeaking()
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "stopped": stopped})}]}))
+          elif toolName == "listen":
+            # Interrupt any playing speech, then listen on mic until user stops talking
+            discard stopSpeaking()
+            let whisperModelName = toolArgs.getOrDefault("whisper_model").getStr("ggml-base.en.bin")
+            let language = toolArgs.getOrDefault("language").getStr("en")
+            let timeoutMs = toolArgs.getOrDefault("timeout_ms").getInt(10000)
+            var rec = newSpeechRecognizer(whisperModelName, language)
+            var mic = newAudioCapture(WHISPER_SAMPLE_RATE.uint32)
+            var v = newVad()
+            mic.start()
+            var speechBuf: seq[float32] = @[]
+            var frame = newSeq[float32](v.config.frameSize)
+            var silenceFrames = 0
+            var heard = false
+            block listenLoop:
+              while true:
+                let got = mic.read(frame, v.config.frameSize)
+                if got < v.config.frameSize:
+                  sleep(5)
+                  continue
+                let event = v.processFrame(frame[0..<got])
+                case event
+                of veSpeechStart:
+                  heard = true
+                  silenceFrames = 0
+                  let pad = v.drainPad()
+                  speechBuf = pad & frame[0..<got]
+                of veSpeechEnd:
+                  break listenLoop
+                of veNone:
+                  if v.state in {vsSpeech, vsTrailing}:
+                    speechBuf.add frame[0..<got]
+                  else:
+                    inc silenceFrames
+                    let silMs = silenceFrames * v.config.frameSize * 1000 div WHISPER_SAMPLE_RATE
+                    if silMs >= timeoutMs:
+                      break listenLoop
+            mic.stop()
+            mic.close()
+            var text = ""
+            if speechBuf.len > 0:
+              text = rec.transcribe(speechBuf).strip()
+            rec.close()
+            mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+              "text": text,
+              "heard": heard,
+              "samples": speechBuf.len,
+              "duration": (speechBuf.len.float / WHISPER_SAMPLE_RATE.float).formatFloat(ffDecimal, 2).parseFloat})}]}))
           elif toolName == "models":
             var arr = newJArray()
             if dirExists(pkgModelDir):

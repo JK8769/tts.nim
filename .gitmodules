@@ -5,3 +5,6 @@
 [submodule "vendor/espeak-ng"]
 	path = vendor/espeak-ng
 	url = https://github.com/espeak-ng/espeak-ng.git
+[submodule "vendor/whisper.cpp"]
+	path = vendor/whisper.cpp
+	url = https://github.com/ggerganov/whisper.cpp.git
