@@ -6,9 +6,10 @@
 ##   tts_cli download kokoro-en
 ##   tts_cli models
 
-import std/[os, strutils, strformat, sequtils, json, algorithm, terminal, osproc]
+import std/[os, strutils, strformat, sequtils, json, algorithm, terminal]
 import tts/common
 import tts/engine
+import tts/audio/device
 import docopt
 
 const Doc = """
@@ -335,32 +336,13 @@ when isMainModule:
     try: e.loadModel(defaultModel, "af_heart")
     except: discard
 
-    var speakPlayer: Process = nil
-    var speakTmpWav: string = ""
-
-    proc cleanupSpeaker() =
-      ## Clean up player process and temp file if playback finished naturally.
-      if speakPlayer != nil and speakPlayer.peekExitCode() != -1:
-        speakPlayer.close()
-        speakPlayer = nil
-        if speakTmpWav.len > 0 and fileExists(speakTmpWav):
-          removeFile(speakTmpWav)
-          speakTmpWav = ""
+    var speaker: AudioPlayback = nil
 
     proc stopSpeaking(): bool =
-      ## Kill any active speak playback. Returns true if something was stopped.
-      if speakPlayer != nil:
-        let wasPlaying = speakPlayer.peekExitCode() == -1
-        try:
-          if wasPlaying: speakPlayer.terminate()
-          discard speakPlayer.waitForExit()
-          speakPlayer.close()
-        except: discard
-        speakPlayer = nil
-        if speakTmpWav.len > 0 and fileExists(speakTmpWav):
-          removeFile(speakTmpWav)
-          speakTmpWav = ""
-        return wasPlaying
+      ## Flush and stop any active playback. Returns true if something was playing.
+      if speaker != nil and not speaker.isIdle:
+        speaker.flush()
+        return true
       return false
 
     proc mcpSend(j: JsonNode) =
@@ -418,7 +400,6 @@ when isMainModule:
     ]
 
     while true:
-      cleanupSpeaker()
       let req = mcpRecv()
       if req == nil: break
       let id = req.getOrDefault("id")
@@ -501,7 +482,7 @@ when isMainModule:
                 eng.close()
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $jsonModels}]}))
           elif toolName == "speak":
-            # Interrupt any previous playback first
+            # Interrupt any previous playback
             let interrupted = stopSpeaking()
             let text = toolArgs["text"].getStr()
             let voiceSpec = toolArgs.getOrDefault("voice").getStr("af_heart")
@@ -512,19 +493,16 @@ when isMainModule:
             var voice = vp.voice1
             if vp.isMix:
               voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
-            speakTmpWav = getTempDir() / "tts_speak_" & $getCurrentProcessId() & ".wav"
             let audio = e.synthesize(text, voice, speed)
-            audio.writeWav(speakTmpWav)
-            let totalSamples = audio.samples.len
-            # Start playback in background — don't block the MCP server
-            when defined(macosx):
-              speakPlayer = startProcess("afplay", args = @[speakTmpWav], options = {poUsePath})
-            else:
-              speakPlayer = startProcess("aplay", args = @[speakTmpWav], options = {poUsePath})
-            let dur = totalSamples.float / 24000.0
+            # Direct playback via miniaudio — no temp files
+            if speaker == nil:
+              speaker = newAudioPlayback(uint32(audio.sampleRate))
+              speaker.start()
+            speaker.writeAll(audio.samples)
+            let dur = audio.samples.len.float / audio.sampleRate.float
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "playing": true, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
-              "voice": voiceSpec, "samples": totalSamples,
+              "voice": voiceSpec, "samples": audio.samples.len,
               "interrupted_previous": interrupted})}]}))
           elif toolName == "stop":
             let stopped = stopSpeaking()
