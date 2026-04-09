@@ -13,6 +13,7 @@ const
   STFT_HOP = 128
   STFT_BINS = STFT_N_FFT div 2 + 1  # 129
   LSTM_HIDDEN = 128
+  CONTEXT_SIZE = 64              ## Overlap samples from previous chunk
 
 type
   VadState* = enum
@@ -46,6 +47,7 @@ type
     lstmWih: Tensor       ## (512, 128)
     lstmWhh: Tensor       ## (512, 128)
     lstmBias: Tensor      ## (512,) combined ih+hh bias
+    context: seq[float32] ## 64-sample overlap from previous chunk
 
 proc w(v: SileroVad, key: string): Tensor {.inline.} =
   v.weights[key]
@@ -54,9 +56,18 @@ proc w(v: SileroVad, key: string): Tensor {.inline.} =
 
 proc stft(v: SileroVad, audio: Tensor): Tensor =
   ## Compute STFT magnitude spectrogram.
-  ## audio: (1, 512) → output: (1, T, 129) channels-last for MLX.
-  # Input for MLX conv1d: (batch, seq, channels) = (1, 512, 1)
-  let x = audio.reshape([1, SILERO_CHUNK_SIZE, 1])
+  ## audio: (1, N) → output: (1, T, 129) channels-last for MLX.
+  ## Applies ReflectionPad1d([0, 64]) before conv to match Silero's STFT.
+  let seqLen = audio.dim(1)
+  # Reflection pad: append 64 reflected samples on the right
+  let audioData = audio.toSeqF32()
+  var padded = newSeq[float32](seqLen + CONTEXT_SIZE)
+  for i in 0..<seqLen:
+    padded[i] = audioData[i]
+  for i in 0..<CONTEXT_SIZE:
+    padded[seqLen + i] = audioData[seqLen - 1 - i]
+  let paddedLen = seqLen + CONTEXT_SIZE
+  let x = fromSeq(padded, [1, paddedLen, 1])
   # Conv1D: kernel (258, 256, 1), stride=128 → (1, T, 258)
   let raw = conv1d(x, v.stftKernel, stride = STFT_HOP)
   # Split real/imag and compute magnitude
@@ -95,7 +106,13 @@ proc lstmStep(v: SileroVad, input: Tensor) =
 proc forward*(v: SileroVad, audio: Tensor): float32 =
   ## Process one 512-sample chunk, return speech probability.
   ## audio: (1, 512) float32 at 16kHz.
-  let mag = v.stft(audio)       # (1, T, 129)
+  # Prepend context from previous chunk (64 samples overlap for STFT continuity)
+  let audioData = audio.toSeqF32()
+  var ctxBuf = v.context & audioData
+  # Save tail of current chunk as next context
+  v.context = audioData[SILERO_CHUNK_SIZE - CONTEXT_SIZE ..< SILERO_CHUNK_SIZE]
+  let fullAudio = fromSeq(ctxBuf, [1, CONTEXT_SIZE + SILERO_CHUNK_SIZE])
+  let mag = v.stft(fullAudio)   # (1, T, 129)
   let enc = v.encode(mag)       # (1, T', 128)
   eval(enc)
 
@@ -145,6 +162,7 @@ proc loadSileroVad*(modelDir: string, threshold: float32 = 0.5,
     holdoffChunks: holdoffChunks,
     padBuf: newSeq[float32](padSize),
     padChunks: padChunks,
+    context: newSeq[float32](CONTEXT_SIZE),
   )
   result.weights = loadSafetensors(stPath)
 
@@ -170,9 +188,10 @@ proc loadSileroVad*(modelDir: string, threshold: float32 = 0.5,
   stderr.writeLine "Silero VAD loaded (threshold=", threshold, ")"
 
 proc reset*(v: SileroVad) =
-  ## Reset LSTM state and VAD state machine.
+  ## Reset LSTM state, context buffer, and VAD state machine.
   v.h = zeros([1, LSTM_HIDDEN])
   v.c = zeros([1, LSTM_HIDDEN])
+  v.context = newSeq[float32](CONTEXT_SIZE)
   v.state = vsSilence
   v.holdoffCounter = 0
   v.padPos = 0
