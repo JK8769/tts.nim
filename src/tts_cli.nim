@@ -48,7 +48,7 @@ Options:
   --per-command           Output per-command schema.
   --whisper <wmodel>     Whisper model for STT [default: auto].
   --vad-model <vmodel>   Silero VAD model directory (MLX backend).
-  --lang <lang>          Language for speech recognition [default: en].
+  --lang <lang>          Language for speech recognition [default: auto].
   --greeting <text>      Greeting spoken at conversation start.
   -h, --help             Show this help.
 """
@@ -607,7 +607,7 @@ when isMainModule:
               speaker.waitUntilDone()
             let whisperRaw = toolArgs.getOrDefault("whisper_model").getStr(DefaultWhisper)
             let whisperModelName = findModel(whisperRaw)
-            let language = toolArgs.getOrDefault("language").getStr("en")
+            let language = toolArgs.getOrDefault("language").getStr("auto")
             let timeoutMs = toolArgs.getOrDefault("timeout_ms").getInt(10000)
             var rec = newSpeechRecognizer(whisperModelName, language)
             var mic = newAudioCapture(WHISPER_SAMPLE_RATE.uint32)

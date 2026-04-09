@@ -60,7 +60,7 @@ proc defaultConverseConfig*(): ConverseConfig =
   result = ConverseConfig(
     voice: "af_heart",
     speed: 1.0,
-    language: "en",
+    language: "auto",
     silenceTimeoutMs: 0,
     greeting: "",
   )

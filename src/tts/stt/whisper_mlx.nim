@@ -417,11 +417,11 @@ const
 
 proc getInitialTokens(cfg: WhisperConfig, language: string): seq[int32] =
   ## Build the initial prompt tokens: SOT [+ language + task] + notimestamps
+  ## language="auto" omits the language token, letting the model freely mix languages.
   result = @[int32(SOT_TOKEN)]
-  if cfg.nVocab >= 51865:
+  if cfg.nVocab >= 51865 and language != "auto":
     # Multilingual model — add language and task tokens
     # Language token = SOT + 1 + language_index
-    # For now, support common languages
     let langToken = case language
       of "en": EN_TOKEN
       of "zh": 50260
