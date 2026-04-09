@@ -159,21 +159,17 @@ Wall time includes model loading, phonemization, and WAV encoding. Longer inputs
 ## Install
 
 ```bash
-git clone --recurse-submodules https://github.com/JK8769/tts.nim
-cd tts.nim
-nimble install -y     # builds native deps, downloads models, installs tts_cli
+nimble install https://github.com/JK8769/tts.nim
 ```
 
-Requires: Nim 2.0+, CMake, a C compiler. Platform is auto-detected — Apple Silicon builds the MLX backend, everything else builds GGML.
+Builds native deps, downloads models, and installs `tts_cli`. Requires: Nim 2.0+, CMake, a C compiler. Platform is auto-detected — Apple Silicon builds the MLX backend, everything else builds GGML.
 
-### Step by step (if you prefer)
+### From source
 
 ```bash
 git clone --recurse-submodules https://github.com/JK8769/tts.nim
 cd tts.nim
-nimble build_deps     # build native C deps (MLX or ggml + espeak-ng)
-nimble download       # download models (~260MB MLX, ~400MB GGML)
-nimble build          # build tts_cli
+nimble install        # or: nimble build_deps && nimble download && nimble build
 ```
 
 ## Voices
