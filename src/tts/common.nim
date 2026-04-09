@@ -73,3 +73,48 @@ proc writeWav*(output: AudioOutput, path: string) =
   var f = open(path, fmWrite)
   defer: f.close()
   output.writeWav(f)
+
+proc readLE16(f: File): int16 =
+  discard f.readBuffer(addr result, 2)
+
+proc readLE32(f: File): int32 =
+  discard f.readBuffer(addr result, 4)
+
+proc readWav*(path: string): AudioOutput =
+  ## Read a WAV file (16-bit PCM, mono or stereo) into float32 samples.
+  var f = open(path, fmRead)
+  defer: f.close()
+  # RIFF header
+  var hdr: array[4, char]
+  discard f.readBuffer(addr hdr, 4)
+  discard f.readLE32()  # file size
+  discard f.readBuffer(addr hdr, 4)  # "WAVE"
+  # fmt chunk
+  discard f.readBuffer(addr hdr, 4)  # "fmt "
+  let fmtSize = f.readLE32()
+  discard f.readLE16()  # audio format (1=PCM)
+  let channels = f.readLE16()
+  let sampleRate = f.readLE32()
+  discard f.readLE32()  # byte rate
+  discard f.readLE16()  # block align
+  let bitsPerSample = f.readLE16()
+  if fmtSize > 16:
+    f.setFilePos(f.getFilePos() + fmtSize - 16)
+  # Find data chunk
+  while true:
+    discard f.readBuffer(addr hdr, 4)
+    let chunkSize = f.readLE32()
+    if hdr == ['d', 'a', 't', 'a']:
+      let numSamples = chunkSize div (bitsPerSample div 8) div channels
+      result.sampleRate = sampleRate
+      result.channels = channels.int32
+      result.samples = newSeq[float32](numSamples)
+      for i in 0..<numSamples:
+        var sum: float32 = 0
+        for c in 0..<channels:
+          let s = f.readLE16()
+          sum += s.float32 / 32768.0'f32
+        result.samples[i] = sum / channels.float32
+      return
+    else:
+      f.setFilePos(f.getFilePos() + chunkSize)

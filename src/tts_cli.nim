@@ -414,6 +414,13 @@ when isMainModule:
 
     var speaker: AudioPlayback = nil
 
+    # Cached STT/VAD for listen tool — avoid reloading on every call
+    var cachedRec: SpeechRecognizer
+    var cachedRecLoaded = false
+    when defined(useMlx):
+      var cachedVad: SileroVad
+      var cachedVadLoaded = false
+
     proc stopSpeaking(): bool =
       ## Flush and stop any active playback. Returns true if something was playing.
       if speaker != nil and not speaker.isIdle:
@@ -468,12 +475,13 @@ when isMainModule:
          "required": ["text"]}},
       {"name": "stop", "description": "Stop any speech currently playing. No-op if nothing is playing.",
        "inputSchema": {"type": "object", "properties": {}}},
-      {"name": "listen", "description": "Listen on the microphone until the user stops speaking. Returns transcribed text. Automatically interrupts any playing speech. Uses VAD for speech detection and Whisper for transcription.",
+      {"name": "listen", "description": "Listen on the microphone until the user stops speaking. Returns transcribed text. Automatically interrupts any playing speech. Uses VAD for speech detection and Whisper for transcription. Pass test_audio with a WAV file path to feed audio from file instead of mic (for testing).",
        "inputSchema": {"type": "object",
          "properties": {
            "whisper_model": {"type": "string", "description": "Whisper model name"},
            "language": {"type": "string", "description": "Language code (en, zh, auto). Default: auto (mixed-language)", "default": "auto"},
-           "timeout_ms": {"type": "integer", "description": "Max silence before giving up (ms)", "default": 10000}}}},
+           "timeout_ms": {"type": "integer", "description": "Max silence before giving up (ms)", "default": 10000},
+           "test_audio": {"type": "string", "description": "WAV file path for testing (bypasses mic)"}}}},
       {"name": "models", "description": "List downloaded TTS models",
        "inputSchema": {"type": "object", "properties": {}}}
     ]
@@ -595,87 +603,124 @@ when isMainModule:
               "stopped": stopped})}]}))
           elif toolName == "listen":
             # Mic-mute gate: wait for playback to finish before opening mic
-            # This prevents echo (mic hearing the speakers)
             if speaker != nil and not speaker.isIdle:
               speaker.waitUntilDone()
-            let whisperRaw = toolArgs.getOrDefault("whisper_model").getStr(DefaultWhisper)
-            let whisperModelName = findModel(whisperRaw)
             let language = toolArgs.getOrDefault("language").getStr("auto")
             let timeoutMs = toolArgs.getOrDefault("timeout_ms").getInt(10000)
-            var rec = newSpeechRecognizer(whisperModelName, language)
-            var mic = newAudioCapture(WHISPER_SAMPLE_RATE.uint32)
-            when defined(useMlx):
-              let vadModelDir = findModel(toolArgs.getOrDefault("vad_model").getStr(DefaultVadModel))
-              var v = loadSileroVad(vadModelDir)
-              const frameSize = SILERO_CHUNK_SIZE
-            else:
-              var v = newVad()
-              let frameSize = v.config.frameSize
-            mic.start()
-            var speechBuf: seq[float32] = @[]
-            var frame = newSeq[float32](frameSize)
-            var accumBuf: seq[float32] = @[]
-            var silenceFrames = 0
+            let testAudio = toolArgs.getOrDefault("test_audio").getStr("")
+            # Use cached Whisper — only load once
+            if not cachedRecLoaded:
+              let whisperRaw = toolArgs.getOrDefault("whisper_model").getStr(DefaultWhisper)
+              let whisperModelName = findModel(whisperRaw)
+              cachedRec = newSpeechRecognizer(whisperModelName, language)
+              cachedRecLoaded = true
+
             var heard = false
             var parts: seq[string] = @[]
-            var noDataMs = 0
-            block listenLoop:
-              while true:
-                var tmp = newSeq[float32](frameSize)
-                let got = mic.read(tmp, frameSize)
-                if got > 0:
-                  accumBuf.add tmp[0..<got]
-                  noDataMs = 0
-                else:
-                  noDataMs += 2
-                  if noDataMs >= timeoutMs:
-                    break listenLoop
-                if accumBuf.len < frameSize:
-                  sleep(2)
-                  continue
-                for j in 0..<frameSize:
-                  frame[j] = accumBuf[j]
-                accumBuf = accumBuf[frameSize..^1]
-                let event = v.processFrame(frame)
-                case event
-                of veSpeechStart:
-                  heard = true
-                  silenceFrames = 0
-                  let pad = v.drainPad()
-                  speechBuf = pad & frame[0..<got]
-                of veSpeechEnd:
-                  # Transcribe this segment. Non-verbal sounds (cough, etc.)
-                  # produce empty text and are discarded. Real speech is
-                  # accumulated — user can pause, make a sound to stay alive,
-                  # and continue talking.
-                  if speechBuf.len > 0:
-                    let partial = rec.transcribe(speechBuf).strip()
-                    if partial.len > 0:
-                      parts.add(partial)
-                  speechBuf = @[]
-                  silenceFrames = 0  # reset timeout after any sound
-                of veNone:
-                  if v.state in {vsSpeech, vsTrailing}:
-                    speechBuf.add frame[0..<got]
+
+            if testAudio.len > 0:
+              # File mode: skip VAD (doesn't work on clean TTS audio),
+              # feed directly to Whisper
+              stderr.writeLine "[listen] test_audio: " & testAudio
+              let wav = readWav(testAudio)
+              var samples16k: seq[float32]
+              if wav.sampleRate == WHISPER_SAMPLE_RATE.int32:
+                samples16k = wav.samples
+              else:
+                let ratio = wav.sampleRate.float64 / WHISPER_SAMPLE_RATE.float64
+                let outLen = int(wav.samples.len.float64 / ratio)
+                samples16k = newSeq[float32](outLen)
+                for i in 0..<outLen:
+                  let srcPos = i.float64 * ratio
+                  let idx = int(srcPos)
+                  let frac = float32(srcPos - idx.float64)
+                  if idx + 1 < wav.samples.len:
+                    samples16k[i] = wav.samples[idx] * (1.0'f32 - frac) + wav.samples[idx + 1] * frac
+                  elif idx < wav.samples.len:
+                    samples16k[i] = wav.samples[idx]
+              stderr.writeLine "[listen] " & $samples16k.len & " samples at 16kHz → Whisper"
+              let text = cachedRec.transcribe(samples16k).strip()
+              if text.len > 0:
+                heard = true
+                parts.add(text)
+            else:
+              # Mic mode: VAD + Whisper
+              when defined(useMlx):
+                if not cachedVadLoaded:
+                  let vadModelDir = findModel(toolArgs.getOrDefault("vad_model").getStr(DefaultVadModel))
+                  cachedVad = loadSileroVad(vadModelDir)
+                  cachedVadLoaded = true
+                cachedVad.reset()
+                const frameSize = SILERO_CHUNK_SIZE
+              else:
+                var v = newVad()
+                let frameSize = v.config.frameSize
+              var mic = newAudioCapture(WHISPER_SAMPLE_RATE.uint32)
+              mic.start()
+              var speechBuf: seq[float32] = @[]
+              var frame = newSeq[float32](frameSize)
+              var accumBuf: seq[float32] = @[]
+              var silenceFrames = 0
+              var noDataMs = 0
+              block listenLoop:
+                while true:
+                  var tmp = newSeq[float32](frameSize)
+                  let got = mic.read(tmp, frameSize)
+                  if got > 0:
+                    accumBuf.add tmp[0..<got]
+                    noDataMs = 0
                   else:
-                    inc silenceFrames
-                    let silMs = silenceFrames * frameSize * 1000 div WHISPER_SAMPLE_RATE
-                    if silMs >= timeoutMs:
+                    noDataMs += 2
+                    if noDataMs >= timeoutMs:
                       break listenLoop
-            mic.stop()
-            mic.close()
-            # Transcribe any trailing speech not yet ended by VAD
-            if speechBuf.len > 0:
-              let trailing = rec.transcribe(speechBuf).strip()
-              if trailing.len > 0:
-                parts.add(trailing)
+                  if accumBuf.len < frameSize:
+                    sleep(2)
+                    continue
+                  for j in 0..<frameSize:
+                    frame[j] = accumBuf[j]
+                  accumBuf = accumBuf[frameSize..^1]
+                  when defined(useMlx):
+                    let event = cachedVad.processFrame(frame)
+                  else:
+                    let event = v.processFrame(frame)
+                  case event
+                  of veSpeechStart:
+                    heard = true
+                    silenceFrames = 0
+                    when defined(useMlx):
+                      let pad = cachedVad.drainPad()
+                    else:
+                      let pad = v.drainPad()
+                    speechBuf = pad & frame
+                  of veSpeechEnd:
+                    if speechBuf.len > 0:
+                      let partial = cachedRec.transcribe(speechBuf).strip()
+                      if partial.len > 0:
+                        parts.add(partial)
+                    speechBuf = @[]
+                    silenceFrames = 0
+                  of veNone:
+                    when defined(useMlx):
+                      let inSpeech = cachedVad.state in {vsSpeech, vsTrailing}
+                    else:
+                      let inSpeech = v.state in {vsSpeech, vsTrailing}
+                    if inSpeech:
+                      speechBuf.add frame
+                    else:
+                      inc silenceFrames
+                      let silMs = silenceFrames * frameSize * 1000 div WHISPER_SAMPLE_RATE
+                      if silMs >= timeoutMs:
+                        break listenLoop
+              mic.stop()
+              mic.close()
+              if speechBuf.len > 0:
+                let trailing = cachedRec.transcribe(speechBuf).strip()
+                if trailing.len > 0:
+                  parts.add(trailing)
             let text = parts.join(" ")
-            rec.close()
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "text": text,
-              "heard": heard,
-              "samples": speechBuf.len,
-              "duration": (speechBuf.len.float / WHISPER_SAMPLE_RATE.float).formatFloat(ffDecimal, 2).parseFloat})}]}))
+              "heard": heard})}]}))
           elif toolName == "models":
             var arr = newJArray()
             if dirExists(pkgModelDir):
