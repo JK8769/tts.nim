@@ -1,5 +1,5 @@
 # Package
-version       = "0.1.0"
+version       = "0.2.0"
 author        = "owaf"
 description   = "Native TTS engine for Nim — Kokoro via MLX/ggml. No Python, no ONNX."
 license       = "MIT"
@@ -7,7 +7,7 @@ srcDir        = "src"
 binDir        = "bin"
 bin           = @["tts_cli"]
 installDirs   = @["tts", "lib", "res", "include"]
-installFiles  = @["tts.nim"]
+installFiles  = @["tts.nim", "config.nims"]
 
 # Dependencies
 requires "nim >= 2.0.0"
@@ -193,7 +193,6 @@ proc buildMlx() =
        installDir & "/lib/"
 
 before install:
-  exec "echo 'hostOS=" & hostOS & " hostCPU=" & hostCPU & " apple=" & $isAppleSilicon() & "' > /tmp/nimble_debug.txt"
   ensureSubmodules()
   buildEspeakNg()
   if isAppleSilicon():
