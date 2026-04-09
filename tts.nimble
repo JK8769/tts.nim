@@ -188,6 +188,7 @@ proc buildMlx() =
   exec "cmake --install " & buildDir & " --prefix " & installDir
   # Copy MLX core libs that mlx-c depends on
   exec "cp " & buildDir & "/_deps/mlx-build/libmlx.a " & installDir & "/lib/"
+  exec "cp " & buildDir & "/_deps/mlx-build/mlx/io/libgguflib.a " & installDir & "/lib/"
   exec "cp " & buildDir & "/_deps/fmt-build/libfmt.a " & installDir & "/lib/"
   exec "cp " & buildDir & "/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib " &
        installDir & "/lib/"
