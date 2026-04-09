@@ -406,7 +406,7 @@ proc decodeTokens*(model: WhisperModel, tokens: Tensor, audioFeatures: Tensor,
 
 # ── Greedy decoding ──────────────────────────────────────────────
 
-# Token IDs for whisper-base.en (51864 vocab, English-only)
+# Token IDs for Whisper models (51864 = English-only, 51865 = multilingual)
 const
   SOT_TOKEN = 50257          # <|startoftranscript|>
   EOT_TOKEN = 50256          # <|endoftext|>

@@ -58,7 +58,7 @@ when defined(useMlx):
     "kokoro-en": "kokoro-mlx-q4",
     "kokoro-zh": "kokoro-zh-mlx-q4",
   }
-  const DefaultWhisper = "whisper-base.en-mlx"
+  const DefaultWhisper = "whisper-base-mlx"
   const DefaultVadModel = "silero-vad"
 else:
   const Models = {

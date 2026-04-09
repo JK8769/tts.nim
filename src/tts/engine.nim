@@ -72,7 +72,7 @@ proc mixVoice*(e: TTSEngine, voice1, voice2: string,
   if not e.loaded:
     raise newException(ValueError, "No model loaded. Call loadModel() first.")
   when defined(useMlx):
-    raise newException(ValueError, "Voice mixing not yet supported with MLX backend")
+    e.mlxModel.mixVoice(voice1, voice2, weight, name)
   else:
     e.kokoro.mixVoice(voice1, voice2, weight, name)
 

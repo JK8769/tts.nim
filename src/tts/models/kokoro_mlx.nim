@@ -1155,6 +1155,24 @@ proc synthesize*(model: KokoroModel, text: string,
   if callback != nil:
     callback(result, 0, 1)
 
+proc mixVoice*(model: var KokoroModel, name1, name2: string,
+               weight: float32 = 0.5, mixName: string = ""): string =
+  ## Blend two voices via linear interpolation of their tensors.
+  ## weight=0.0 → pure voice1, weight=1.0 → pure voice2.
+  ## Returns the name under which the mixed voice is registered.
+  if name1 notin model.voices:
+    raise newException(ValueError, "voice not found: " & name1)
+  if name2 notin model.voices:
+    raise newException(ValueError, "voice not found: " & name2)
+  let v1 = model.voices[name1]
+  let v2 = model.voices[name2]
+  result = if mixName.len > 0: mixName else: name1 & "+" & name2
+  let w1 = scalar(1.0'f32 - weight)
+  let w2 = scalar(weight)
+  let mixed = v1 * w1 + v2 * w2
+  eval(mixed)
+  model.voices[result] = mixed
+
 proc listVoices*(model: KokoroModel): seq[string] =
   for name in model.voices.keys:
     result.add(name)
