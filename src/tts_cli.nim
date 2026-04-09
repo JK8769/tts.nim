@@ -10,8 +10,12 @@ import std/[os, strutils, strformat, sequtils, json, algorithm, terminal]
 import tts/common
 import tts/engine
 import tts/audio/device
-import tts/audio/vad
-import tts/stt/whisper
+when defined(useMlx):
+  import tts/audio/silero_vad
+  import tts/stt/whisper_mlx
+else:
+  import tts/audio/vad
+  import tts/stt/whisper
 import tts/converse
 import docopt
 
@@ -24,13 +28,13 @@ Usage:
   tts_cli voices [-m <model>] [--male] [--female] [--en] [--zh] [--json]
   tts_cli download [<name>]
   tts_cli models [--json]
-  tts_cli converse [-m <model>] [-v <voice>] [-s <speed>] [--whisper <wmodel>] [--lang <lang>] [--greeting <text>]
+  tts_cli converse [-m <model>] [-v <voice>] [-s <speed>] [--whisper <wmodel>] [--vad-model <vmodel>] [--lang <lang>] [--greeting <text>]
   tts_cli serve
   tts_cli schema [--per-command]
   tts_cli (-h | --help)
 
 Options:
-  -m, --model <model>    Model file or shorthand (kokoro-en, kokoro-zh) [default: kokoro-en-q5.gguf].
+  -m, --model <model>    Model file or shorthand (kokoro-en) [default: kokoro-en].
   -v, --voice <voice>    Voice name, or mix: voice1+voice2:weight [default: af_heart].
   -s, --speed <speed>    Speed multiplier [default: 1.0].
   -o, --output <output>  Output WAV file, or - for stdout/raw PCM [default: output.wav].
@@ -42,16 +46,26 @@ Options:
   --zh                   Show only Chinese voices.
   --json                 Output as JSON (for agent/programmatic use).
   --per-command           Output per-command schema.
-  --whisper <wmodel>     Whisper model for speech recognition [default: ggml-base.en.bin].
+  --whisper <wmodel>     Whisper model for STT [default: auto].
+  --vad-model <vmodel>   Silero VAD model directory (MLX backend).
   --lang <lang>          Language for speech recognition [default: en].
   --greeting <text>      Greeting spoken at conversation start.
   -h, --help             Show this help.
 """
 
-const Models = {
-  "kokoro-en": "kokoro-en-q5.gguf",
-  "kokoro-zh": "kokoro-v1.1-zh-q5.gguf",
-}
+when defined(useMlx):
+  const Models = {
+    "kokoro-en": "kokoro-mlx-q4",
+    "kokoro-zh": "kokoro-zh-mlx-q4",
+  }
+  const DefaultWhisper = "whisper-base.en-mlx"
+  const DefaultVadModel = "silero-vad"
+else:
+  const Models = {
+    "kokoro-en": "kokoro-en-q5.gguf",
+    "kokoro-zh": "kokoro-v1.1-zh-q5.gguf",
+  }
+  const DefaultWhisper = "ggml-base.en.bin"
 const Repo = "JK8769/tts.nim"
 
 proc listModels(asJson: bool) =
@@ -59,23 +73,41 @@ proc listModels(asJson: bool) =
     var jsonArr = newJArray()
     var count = 0
     for f in walkDir(pkgModelDir):
-      if f.path.endsWith(".gguf"):
-        inc count
-        let name = extractFilename(f.path)
-        let bytes = getFileSize(f.path)
-        let mb = bytes div (1024 * 1024)
-        var voiceCount = 0
-        try:
-          var e = newTTSEngine()
-          e.loadModel(f.path, "af_heart")
-          voiceCount = e.listVoices().len
-          e.close()
-        except: discard
-        if asJson:
-          jsonArr.add %*{"model": name, "path": f.path,
-                         "size_bytes": bytes, "voices": voiceCount}
-        else:
-          echo "  ", name, "  (", mb, " MB, ", voiceCount, " voices)"
+      when defined(useMlx):
+        # MLX models are directories with safetensors
+        if f.kind == pcDir:
+          let name = extractFilename(f.path)
+          var voiceCount = 0
+          try:
+            var e = newTTSEngine()
+            e.loadModel(f.path, "af_heart")
+            voiceCount = e.listVoices().len
+            e.close()
+          except: discard
+          if voiceCount > 0:
+            inc count
+            if asJson:
+              jsonArr.add %*{"model": name, "path": f.path, "voices": voiceCount}
+            else:
+              echo "  ", name, "  (", voiceCount, " voices)"
+      else:
+        if f.path.endsWith(".gguf"):
+          inc count
+          let name = extractFilename(f.path)
+          let bytes = getFileSize(f.path)
+          let mb = bytes div (1024 * 1024)
+          var voiceCount = 0
+          try:
+            var e = newTTSEngine()
+            e.loadModel(f.path, "af_heart")
+            voiceCount = e.listVoices().len
+            e.close()
+          except: discard
+          if asJson:
+            jsonArr.add %*{"model": name, "path": f.path,
+                           "size_bytes": bytes, "voices": voiceCount}
+          else:
+            echo "  ", name, "  (", mb, " MB, ", voiceCount, " voices)"
     if asJson:
       echo jsonArr.pretty
     elif count == 0:
@@ -259,11 +291,14 @@ when isMainModule:
     let wantZh = args["--zh"]
     let rawModel = $args["--model"]
     let model = resolveModel(rawModel)
-    let filterModel = rawModel != "kokoro-en-q5.gguf"
+    let filterModel = rawModel != "kokoro-en"
     if dirExists(pkgModelDir):
       var jsonModels = newJArray()
       for f in walkDir(pkgModelDir):
-        if not f.path.endsWith(".gguf"): continue
+        when defined(useMlx):
+          if f.kind != pcDir: continue
+        else:
+          if not f.path.endsWith(".gguf"): continue
         let name = extractFilename(f.path)
         if filterModel and name != model: continue
         var e = newTTSEngine()
@@ -340,7 +375,11 @@ when isMainModule:
     let model = resolveModel($args["--model"])
     let voiceSpec = $args["--voice"]
     let speed = parseFloat($args["--speed"]).float32
-    let whisperModel = $args["--whisper"]
+    let whisperRaw = $args["--whisper"]
+    let whisperModel = if whisperRaw == "auto": findModel(DefaultWhisper)
+                       else: findModel(whisperRaw)
+    if whisperModel.len == 0:
+      die("Whisper model not found: " & whisperRaw & " (run: nimble download)", false)
     let lang = $args["--lang"]
     let greeting = if args["--greeting"]: $args["--greeting"] else: ""
     var config = defaultConverseConfig()
@@ -348,6 +387,11 @@ when isMainModule:
     config.speed = speed
     config.language = lang
     config.greeting = greeting
+    when defined(useMlx):
+      let vadRaw = if args["--vad-model"]: $args["--vad-model"] else: DefaultVadModel
+      config.vadModelDir = findModel(vadRaw)
+      if config.vadModelDir.len == 0:
+        die("VAD model not found: " & vadRaw & " (run: nimble download)", false)
     echo "Starting conversation (speak to begin, Ctrl+C to exit)..."
     echo "  TTS model: ", model, " | Voice: ", voiceSpec
     echo "  Whisper model: ", whisperModel, " | Language: ", lang
@@ -561,21 +605,28 @@ when isMainModule:
             # This prevents echo (mic hearing the speakers)
             if speaker != nil and not speaker.isIdle:
               speaker.waitUntilDone()
-            let whisperModelName = toolArgs.getOrDefault("whisper_model").getStr("ggml-base.en.bin")
+            let whisperRaw = toolArgs.getOrDefault("whisper_model").getStr(DefaultWhisper)
+            let whisperModelName = findModel(whisperRaw)
             let language = toolArgs.getOrDefault("language").getStr("en")
             let timeoutMs = toolArgs.getOrDefault("timeout_ms").getInt(10000)
             var rec = newSpeechRecognizer(whisperModelName, language)
             var mic = newAudioCapture(WHISPER_SAMPLE_RATE.uint32)
-            var v = newVad()
+            when defined(useMlx):
+              let vadModelDir = findModel(toolArgs.getOrDefault("vad_model").getStr(DefaultVadModel))
+              var v = loadSileroVad(vadModelDir)
+              const frameSize = SILERO_CHUNK_SIZE
+            else:
+              var v = newVad()
+              let frameSize = v.config.frameSize
             mic.start()
             var speechBuf: seq[float32] = @[]
-            var frame = newSeq[float32](v.config.frameSize)
+            var frame = newSeq[float32](frameSize)
             var silenceFrames = 0
             var heard = false
             block listenLoop:
               while true:
-                let got = mic.read(frame, v.config.frameSize)
-                if got < v.config.frameSize:
+                let got = mic.read(frame, frameSize)
+                if got < frameSize:
                   sleep(5)
                   continue
                 let event = v.processFrame(frame[0..<got])
@@ -592,7 +643,7 @@ when isMainModule:
                     speechBuf.add frame[0..<got]
                   else:
                     inc silenceFrames
-                    let silMs = silenceFrames * v.config.frameSize * 1000 div WHISPER_SAMPLE_RATE
+                    let silMs = silenceFrames * frameSize * 1000 div WHISPER_SAMPLE_RATE
                     if silMs >= timeoutMs:
                       break listenLoop
             mic.stop()

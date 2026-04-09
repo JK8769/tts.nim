@@ -9,17 +9,17 @@ const
     ## models/ inside the package dir (works for both git clone and nimble install).
 
 proc findModel*(name: string): string =
-  ## Find a model file. Searches:
-  ##   1. exact/relative path
+  ## Find a model file or directory. Searches:
+  ##   1. exact/relative path (file or directory)
   ##   2. package models/ dir (nimble pkg or git repo)
   ##   3. TTS_MODEL_DIR env var
-  if fileExists(name): return name
+  if fileExists(name) or dirExists(name): return name
   let inPkg = pkgModelDir / name
-  if fileExists(inPkg): return inPkg
+  if fileExists(inPkg) or dirExists(inPkg): return inPkg
   let envDir = getEnv("TTS_MODEL_DIR")
   if envDir.len > 0:
     let p = envDir / name
-    if fileExists(p): return p
+    if fileExists(p) or dirExists(p): return p
   return ""
 
 type

@@ -3,10 +3,17 @@
 
 import std/[os, strutils]
 import audio/device
-import audio/vad
-import stt/whisper
 import engine
 import common
+
+when defined(useMlx):
+  import stt/whisper_mlx
+  import audio/silero_vad
+  export silero_vad.VadState, silero_vad.VadEvent
+else:
+  import audio/vad
+  import stt/whisper
+  export vad.VadState, vad.VadEvent
 
 const
   TTS_SAMPLE_RATE = 24000
@@ -29,28 +36,38 @@ type
     voice*: string
     speed*: float32
     language*: string         ## Whisper language ("en", "zh", "auto")
-    vadConfig*: VadConfig
+    when not defined(useMlx):
+      vadConfig*: VadConfig
     silenceTimeoutMs*: int    ## How long to wait in silence before ending conversation (0 = never)
     greeting*: string         ## Optional greeting spoken at start
+    when defined(useMlx):
+      vadModelDir*: string    ## Path to Silero VAD model directory
+      vadThreshold*: float32  ## Speech probability threshold
 
   ConverseLoop* = ref object
     engine: TTSEngine
     recognizer: SpeechRecognizer
     speaker: AudioPlayback
     mic: AudioCapture
-    vadInst: Vad
+    when defined(useMlx):
+      vadInst: SileroVad
+    else:
+      vadInst: Vad
     config: ConverseConfig
     running: bool
 
 proc defaultConverseConfig*(): ConverseConfig =
-  ConverseConfig(
+  result = ConverseConfig(
     voice: "af_heart",
     speed: 1.0,
     language: "en",
-    vadConfig: defaultVadConfig(),
     silenceTimeoutMs: 0,
     greeting: "",
   )
+  when not defined(useMlx):
+    result.vadConfig = defaultVadConfig()
+  when defined(useMlx):
+    result.vadThreshold = 0.5
 
 proc newConverseLoop*(ttsModel, whisperModel: string,
                       config: ConverseConfig = defaultConverseConfig()): ConverseLoop =
@@ -59,7 +76,10 @@ proc newConverseLoop*(ttsModel, whisperModel: string,
   let rec = newSpeechRecognizer(whisperModel, config.language)
   let speaker = newAudioPlayback(TTS_SAMPLE_RATE.uint32)
   let mic = newAudioCapture(STT_SAMPLE_RATE.uint32)
-  let v = newVad(config.vadConfig)
+  when defined(useMlx):
+    let v = loadSileroVad(config.vadModelDir, config.vadThreshold)
+  else:
+    let v = newVad(config.vadConfig)
   ConverseLoop(
     engine: e, recognizer: rec,
     speaker: speaker, mic: mic,
@@ -91,14 +111,19 @@ proc run*(cl: ConverseLoop, onTurn: ResponseCallback) =
   if cl.config.greeting.len > 0:
     cl.speak(cl.config.greeting)
 
+  when defined(useMlx):
+    const frameSize = SILERO_CHUNK_SIZE  # 512 samples = 32ms at 16kHz
+  else:
+    let frameSize = cl.config.vadConfig.frameSize
+
   var speechBuf: seq[float32] = @[]
-  var frame = newSeq[float32](cl.config.vadConfig.frameSize)
+  var frame = newSeq[float32](frameSize)
   var silenceFrames = 0
 
   while cl.running:
     # Read a frame from the mic
-    let got = cl.mic.read(frame, cl.config.vadConfig.frameSize)
-    if got < cl.config.vadConfig.frameSize:
+    let got = cl.mic.read(frame, frameSize)
+    if got < frameSize:
       sleep(5)
       continue
 
@@ -136,7 +161,7 @@ proc run*(cl: ConverseLoop, onTurn: ResponseCallback) =
         # In silence — check timeout
         inc silenceFrames
         if cl.config.silenceTimeoutMs > 0:
-          let silenceMs = silenceFrames * cl.config.vadConfig.frameSize * 1000 div STT_SAMPLE_RATE
+          let silenceMs = silenceFrames * frameSize * 1000 div STT_SAMPLE_RATE
           if silenceMs >= cl.config.silenceTimeoutMs:
             discard onTurn(ConverseTurn(kind: ctSilenceTimeout, text: ""))
             break

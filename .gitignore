@@ -1,6 +1,9 @@
 .DS_Store
 vendor/ggml/build/
 vendor/espeak-ng/build/
+vendor/mlx-c-src/build/
+vendor/mlx/
+vendor/whisper.cpp/build/
 *.wav
 nimcache/
 nimble.paths

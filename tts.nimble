@@ -1,7 +1,7 @@
 # Package
 version       = "0.1.0"
 author        = "owaf"
-description   = "Native TTS engine for Nim — Kokoro via ggml. No Python, no ONNX."
+description   = "Native TTS engine for Nim — Kokoro via MLX/ggml. No Python, no ONNX."
 license       = "MIT"
 srcDir        = "src"
 binDir        = "bin"
@@ -13,6 +13,11 @@ installFiles  = @["tts.nim"]
 requires "nim >= 2.0.0"
 requires "zippy >= 0.10.0"
 requires "https://github.com/JK8769/docopt.nim >= 0.8.0"
+
+# ── Platform detection ────────────────────────────────────────────
+
+proc isAppleSilicon(): bool =
+  hostOS == "macosx" and hostCPU == "arm64"
 
 proc buildGgml() =
   let root = thisDir()
@@ -66,16 +71,54 @@ proc buildEspeakNg() =
   for lang in @["en"]:
     exec "cp " & builtData & "/" & lang & "_dict " & dataDir & "/ 2>/dev/null || true"
 
-proc downloadModel(name, file: string) =
-  let dest = thisDir() & "/src/res/models/" & file
+proc downloadFile(name, url, dest: string, required = true) =
   if fileExists(dest):
     echo name & " ✓"
     return
+  echo "Downloading " & name & "..."
+  if required:
+    exec "curl -L --progress-bar --fail -o " & dest & " " & url
+  else:
+    # Optional download — warn but don't fail on 404
+    let code = gorgeEx("curl -L --progress-bar --fail -o " & dest & " " & url)
+    if code.exitCode != 0:
+      echo "  ⚠ Download failed for " & name & " (place manually in " & dest & ")"
+      if fileExists(dest): rmFile dest  # remove partial download
+
+proc downloadModel(name, file: string) =
+  let dest = thisDir() & "/src/res/models/" & file
   mkDir thisDir() & "/src/res/models"
   let repo = "JK8769/tts.nim"
-  echo "Downloading " & name & "..."
-  exec "curl -L --progress-bar --fail -o " & dest &
-       " https://github.com/" & repo & "/releases/latest/download/" & file
+  downloadFile(name, "https://github.com/" & repo &
+    "/releases/latest/download/" & file, dest)
+
+proc downloadMlxModel(name, file: string) =
+  ## Download and extract a tar.gz model archive for MLX backend.
+  let modelsDir = thisDir() & "/src/res/models"
+  let dirName = file.replace(".tar.gz", "")
+  let dest = modelsDir & "/" & dirName
+  if dirExists(dest):
+    echo name & " ✓"
+    return
+  mkDir modelsDir
+  let repo = "JK8769/tts.nim"
+  let tarball = modelsDir & "/" & file
+  downloadFile(name, "https://github.com/" & repo &
+    "/releases/latest/download/" & file, tarball, required = false)
+  if fileExists(tarball):
+    exec "tar -xzf " & tarball & " -C " & modelsDir
+    rmFile tarball
+
+proc downloadWhisperMlx() =
+  ## Download Whisper base.en model (safetensors) from HuggingFace.
+  let dest = thisDir() & "/src/res/models/whisper-base.en-mlx"
+  if dirExists(dest) and fileExists(dest & "/model.safetensors"):
+    echo "whisper-base.en-mlx ✓"
+    return
+  mkDir dest
+  let base = "https://huggingface.co/openai/whisper-base.en/resolve/main"
+  for f in @["config.json", "model.safetensors", "vocab.json"]:
+    downloadFile("whisper " & f, base & "/" & f, dest & "/" & f)
 
 proc buildWhisper() =
   let root = thisDir()
@@ -105,7 +148,12 @@ proc stageHeaders() =
   let root = thisDir()
   let incDir = root & "/src/include"
   mkDir incDir
-  exec "cp -r " & root & "/vendor/ggml/include/. " & incDir & "/"
+  # ggml headers — only needed for GGML backend
+  if not isAppleSilicon():
+    if fileExists(root & "/vendor/ggml/include/ggml.h"):
+      exec "cp -r " & root & "/vendor/ggml/include/. " & incDir & "/"
+    elif fileExists(root & "/vendor/whisper.cpp/ggml/include/ggml.h"):
+      exec "cp -r " & root & "/vendor/whisper.cpp/ggml/include/. " & incDir & "/"
   exec "cp -r " & root & "/vendor/espeak-ng/src/include/. " & incDir & "/"
 
 proc downloadWhisperModel(name, file: string) =
@@ -118,24 +166,68 @@ proc downloadWhisperModel(name, file: string) =
   exec "curl -L --progress-bar --fail -o " & dest &
        " https://huggingface.co/ggerganov/whisper.cpp/resolve/main/" & file
 
+proc buildMlx() =
+  let root = thisDir()
+  let mlxSrc = root & "/vendor/mlx-c-src"
+  let buildDir = mlxSrc & "/build"
+  let installDir = root & "/vendor/mlx"
+  if fileExists(installDir & "/lib/libmlxc.a") and fileExists(installDir & "/lib/libmlx.a"):
+    echo "mlx-c ✓ (already built)"
+    return
+  mkDir buildDir
+  exec "cmake -S " & mlxSrc & " -B " & buildDir &
+       " -DCMAKE_BUILD_TYPE=Release -DMLX_C_BUILD_EXAMPLES=OFF"
+  exec "cmake --build " & buildDir & " -j"
+  exec "cmake --install " & buildDir & " --prefix " & installDir
+  # Copy MLX core libs that mlx-c depends on
+  exec "cp " & buildDir & "/_deps/mlx-build/libmlx.a " & installDir & "/lib/"
+  exec "cp " & buildDir & "/_deps/fmt-build/libfmt.a " & installDir & "/lib/"
+  exec "cp " & buildDir & "/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib " &
+       installDir & "/lib/"
+
 before install:
-  buildGgml()
   buildEspeakNg()
-  buildWhisper()
-  downloadModel("kokoro-en", "kokoro-en-q5.gguf")
-  downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
-  downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
+  if isAppleSilicon():
+    echo "=== Apple Silicon detected — building MLX backend ==="
+    buildMlx()
+    downloadMlxModel("kokoro-mlx-q4", "kokoro-mlx-q4.tar.gz")
+    downloadMlxModel("kokoro-zh-mlx-q4", "kokoro-zh-mlx-q4.tar.gz")
+    downloadWhisperMlx()
+    downloadMlxModel("silero-vad", "silero-vad.tar.gz")
+  else:
+    echo "=== Building GGML backend ==="
+    buildGgml()
+    buildWhisper()
+    downloadModel("kokoro-en", "kokoro-en-q5.gguf")
+    downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
+    downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
   stageHeaders()
 
-task build_deps, "Build ggml, espeak-ng, and whisper.cpp from vendor source":
-  buildGgml()
+task build_deps, "Build native deps (auto-detects platform: MLX on Apple Silicon, GGML elsewhere)":
   buildEspeakNg()
+  if isAppleSilicon():
+    buildMlx()
+  else:
+    buildGgml()
+    buildWhisper()
+
+task build_mlx, "Build only mlx-c from vendor source":
+  buildMlx()
+
+task build_ggml, "Build only ggml from vendor source":
+  buildGgml()
   buildWhisper()
 
-task download, "Download default TTS and STT models":
-  downloadModel("kokoro-en", "kokoro-en-q5.gguf")
-  downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
-  downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
+task download, "Download models (auto-detects platform)":
+  if isAppleSilicon():
+    downloadMlxModel("kokoro-mlx-q4", "kokoro-mlx-q4.tar.gz")
+    downloadMlxModel("kokoro-zh-mlx-q4", "kokoro-zh-mlx-q4.tar.gz")
+    downloadWhisperMlx()
+    downloadMlxModel("silero-vad", "silero-vad.tar.gz")
+  else:
+    downloadModel("kokoro-en", "kokoro-en-q5.gguf")
+    downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
+    downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
 
 proc basename(path: string): string =
   let i = path.rfind('/')
