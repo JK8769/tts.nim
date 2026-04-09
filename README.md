@@ -164,6 +164,14 @@ nimble install https://github.com/JK8769/tts.nim
 
 Builds native deps, downloads models, and installs `tts_cli`. Requires: Nim 2.0+, CMake, a C compiler. Platform is auto-detected — Apple Silicon builds the MLX backend, everything else builds GGML.
 
+### Upgrade
+
+```bash
+nimble install https://github.com/JK8769/tts.nim@#head
+```
+
+Nimble caches by version tag, so `@#head` forces it to fetch the latest commit. Already-built deps and downloaded models are reused.
+
 ### From source
 
 ```bash
