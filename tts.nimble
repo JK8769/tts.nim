@@ -19,6 +19,13 @@ requires "https://github.com/JK8769/docopt.nim >= 0.8.0"
 proc isAppleSilicon(): bool =
   hostOS == "macosx" and hostCPU == "arm64"
 
+proc ensureSubmodules() =
+  ## nimble doesn't clone submodules — init them if missing.
+  let root = thisDir()
+  if not fileExists(root & "/vendor/espeak-ng/CMakeLists.txt"):
+    echo "Initializing git submodules..."
+    exec "git -C " & root & " submodule update --init --recursive"
+
 proc buildGgml() =
   let root = thisDir()
   let ggmlSrc = root & "/vendor/ggml"
@@ -186,6 +193,7 @@ proc buildMlx() =
        installDir & "/lib/"
 
 before install:
+  ensureSubmodules()
   buildEspeakNg()
   if isAppleSilicon():
     echo "=== Apple Silicon detected — building MLX backend ==="
@@ -204,6 +212,7 @@ before install:
   stageHeaders()
 
 task build_deps, "Build native deps (auto-detects platform: MLX on Apple Silicon, GGML elsewhere)":
+  ensureSubmodules()
   buildEspeakNg()
   if isAppleSilicon():
     buildMlx()
