@@ -1,12 +1,13 @@
 # tts.nim
 
-Native text-to-speech and speech-to-text engine for Nim. Uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) for TTS and [Whisper](https://github.com/ggerganov/whisper.cpp) for STT, both via [ggml](https://github.com/ggerganov/ggml). No Python, no ONNX -- just C and Nim.
+Native text-to-speech and speech-to-text engine for Nim. Uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M) for TTS and [Whisper](https://github.com/openai/whisper) for STT. Apple Silicon uses [MLX](https://github.com/ml-explore/mlx) with 4-bit quantization; other platforms use [ggml](https://github.com/ggerganov/ggml). No Python, no ONNX -- just C and Nim.
 
 - 54+ voices across 9 languages (English, Chinese, Spanish, French, Hindi, Italian, Japanese, Portuguese, + more via espeak-ng)
-- ~200MB quantized TTS models (Q5), ~140MB Whisper base model
+- ~130MB quantized TTS models (4-bit MLX on Apple Silicon, Q5 GGML elsewhere)
+- 8-12x realtime on Apple M2
 - Metal acceleration on macOS, CPU on Linux
 - Direct audio I/O via [miniaudio](https://miniaud.io/) (playback + mic capture)
-- Voice activity detection for hands-free conversation
+- Voice activity detection for hands-free conversation (neural Silero VAD on MLX, energy-based on GGML)
 - Vendored espeak-ng for phonemization (statically linked, zero system deps)
 - Native Bopomofo phonemizer for Chinese
 
@@ -143,6 +144,18 @@ MCP tools:
 - **voices** — list available voices with language/gender metadata
 - **models** — list downloaded models
 
+## Performance
+
+Benchmarked on Apple M2 (8-core GPU, 24GB) with 4-bit quantized MLX models:
+
+| Input | Audio length | Wall time | Realtime factor |
+|-------|-------------|-----------|-----------------|
+| 1 sentence (12 words) | 3.4s | 0.4s | **8.5x** |
+| 2 sentences (19 words) | 6.2s | 0.6s | **10x** |
+| 1 paragraph (73 words) | 22.6s | 1.9s | **12x** |
+
+Wall time includes model loading, phonemization, and WAV encoding. Longer inputs are more efficient due to amortized startup cost. Streaming mode (`--stream`) delivers the first audio chunk in ~200ms.
+
 ## Install
 
 ### From nimble (builds everything automatically)
@@ -203,44 +216,61 @@ nimble lang remove es             # remove Spanish
 src/
   tts.nim                         # library entry point
   tts_cli.nim                     # CLI binary (docopt + MCP server + converse)
+  config.nims                     # auto-detect platform → -d:useMlx on Apple Silicon
   tts/
     common.nim                    # AudioOutput, WAV writer, path utils
-    engine.nim                    # TTSEngine API
+    engine.nim                    # TTSEngine API (dispatches to MLX or GGML)
     converse.nim                  # conversation loop (mic → VAD → STT → TTS → speaker)
     tokenizer.nim                 # phoneme string -> token IDs
     audio/
       device.nim                  # miniaudio playback + capture (ring buffer)
-      vad.nim                     # voice activity detection (energy-based)
+      vad.nim                     # energy-based VAD (GGML backend)
+      silero_vad.nim              # neural Silero VAD v5 (MLX backend)
       ma_bridge.{c,h}            # C bridge for miniaudio
     stt/
-      whisper.nim                 # Whisper STT via whisper.cpp (shared lib)
+      whisper.nim                 # Whisper STT via whisper.cpp (GGML backend)
+      whisper_mlx.nim             # Whisper STT via MLX (Apple Silicon)
       whisper_bridge.{c,h}       # C bridge for whisper.cpp
+    mlx/
+      mlx.nim                     # high-level MLX tensor API
+      mlx_capi.nim                # mlx-c FFI bindings
     ggml/
       ggml_bindings.nim           # ggml C FFI
       gguf_loader.nim             # GGUF model file loader
     models/
-      kokoro.nim                  # Kokoro model runner
+      kokoro.nim                  # Kokoro via GGML
+      kokoro_mlx.nim              # Kokoro via MLX (quantization-aware)
     phonem/
       phonemizer.nim              # unified phonemizer (routes to espeak/bopomofo)
       espeak.nim                  # espeak-ng static bindings
       bopomofo.nim                # native Chinese phonemizer
 vendor/
-  ggml/                           # ggml submodule (mmwillet fork, support-for-tts)
+  mlx-c-src/                      # mlx-c submodule (Apple Silicon only)
+  ggml/                           # ggml submodule (Linux/Intel)
   espeak-ng/                      # espeak-ng submodule
-  whisper.cpp/                    # whisper.cpp submodule (built as shared lib)
+  whisper.cpp/                    # whisper.cpp submodule (GGML backend)
   miniaudio/                      # miniaudio single-header audio library
 ```
 
 ## Models
 
-Models are GGUF files from [TTS.cpp](https://github.com/mmwillet2/TTS.cpp)'s conversions:
+Platform is auto-detected: Apple Silicon gets MLX models, everything else gets GGML.
+
+**MLX (Apple Silicon)** -- 4-bit quantized safetensors:
+
+| Model | Size | Languages | Voices |
+|-------|------|-----------|--------|
+| `kokoro-mlx-q4` | 131 MB | en | 28 |
+| `kokoro-zh-mlx-q4` | 134 MB | zh, en | 103 |
+
+**GGML (Linux / Intel Mac)** -- Q5 quantized GGUF from [TTS.cpp](https://github.com/mmwillet2/TTS.cpp):
 
 | Model | Size | Languages | Voices |
 |-------|------|-----------|--------|
 | `kokoro-en-q5.gguf` | 191 MB | en | 28 |
 | `kokoro-v1.1-zh-q5.gguf` | 198 MB | zh, en | 103 |
 
-Models are downloaded from GitHub releases. Set `TTS_MODEL_DIR` to override the search path.
+Models are downloaded automatically during `nimble install`. Set `TTS_MODEL_DIR` to override the search path.
 
 ## License
 
