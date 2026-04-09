@@ -623,7 +623,7 @@ when isMainModule:
             var frame = newSeq[float32](frameSize)
             var silenceFrames = 0
             var heard = false
-            var text = ""
+            var parts: seq[string] = @[]
             block listenLoop:
               while true:
                 let got = mic.read(frame, frameSize)
@@ -638,18 +638,16 @@ when isMainModule:
                   let pad = v.drainPad()
                   speechBuf = pad & frame[0..<got]
                 of veSpeechEnd:
-                  # Transcribe eagerly — if it's just a non-verbal sound
-                  # (cough, laugh, etc.) Whisper returns empty/short text.
-                  # Discard and keep listening instead of returning garbage.
+                  # Transcribe this segment. Non-verbal sounds (cough, etc.)
+                  # produce empty text and are discarded. Real speech is
+                  # accumulated — user can pause, make a sound to stay alive,
+                  # and continue talking.
                   if speechBuf.len > 0:
                     let partial = rec.transcribe(speechBuf).strip()
                     if partial.len > 0:
-                      speechBuf = @[]  # clear so we don't re-transcribe
-                      text = partial
-                      break listenLoop
-                  # Non-verbal or empty — reset and keep listening
+                      parts.add(partial)
                   speechBuf = @[]
-                  silenceFrames = 0
+                  silenceFrames = 0  # reset timeout after any sound
                 of veNone:
                   if v.state in {vsSpeech, vsTrailing}:
                     speechBuf.add frame[0..<got]
@@ -660,8 +658,12 @@ when isMainModule:
                       break listenLoop
             mic.stop()
             mic.close()
-            if text.len == 0 and speechBuf.len > 0:
-              text = rec.transcribe(speechBuf).strip()
+            # Transcribe any trailing speech not yet ended by VAD
+            if speechBuf.len > 0:
+              let trailing = rec.transcribe(speechBuf).strip()
+              if trailing.len > 0:
+                parts.add(trailing)
+            let text = parts.join(" ")
             rec.close()
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
               "text": text,
