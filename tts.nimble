@@ -193,8 +193,7 @@ proc buildMlx() =
        installDir & "/lib/"
 
 before install:
-  echo ">>> Platform: hostOS=" & hostOS & " hostCPU=" & hostCPU
-  echo ">>> isAppleSilicon=" & $isAppleSilicon()
+  writeFile("/tmp/nimble_debug.txt", "hostOS=" & hostOS & " hostCPU=" & hostCPU & " apple=" & $isAppleSilicon())
   ensureSubmodules()
   buildEspeakNg()
   if isAppleSilicon():
