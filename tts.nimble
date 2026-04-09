@@ -117,13 +117,14 @@ proc downloadMlxModel(name, file: string) =
     rmFile tarball
 
 proc downloadWhisperMlx() =
-  ## Download Whisper base multilingual model (safetensors) from HuggingFace.
-  let dest = thisDir() & "/src/res/models/whisper-base-mlx"
+  ## Download Whisper base.en model (safetensors) from HuggingFace.
+  ## Uses English-only model — multilingual requires mel spectrogram alignment work.
+  let dest = thisDir() & "/src/res/models/whisper-base.en-mlx"
   if dirExists(dest) and fileExists(dest & "/model.safetensors"):
-    echo "whisper-base-mlx ✓"
+    echo "whisper-base.en-mlx ✓"
     return
   mkDir dest
-  let base = "https://huggingface.co/openai/whisper-base/resolve/main"
+  let base = "https://huggingface.co/openai/whisper-base.en/resolve/main"
   for f in @["config.json", "model.safetensors", "vocab.json"]:
     downloadFile("whisper " & f, base & "/" & f, dest & "/" & f)
 

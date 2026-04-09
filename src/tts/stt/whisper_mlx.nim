@@ -410,10 +410,13 @@ proc decodeTokens*(model: WhisperModel, tokens: Tensor, audioFeatures: Tensor,
 const
   SOT_TOKEN = 50257          # <|startoftranscript|>
   EOT_TOKEN = 50256          # <|endoftext|>
-  TRANSCRIBE_TOKEN = 50358   # <|transcribe|>
-  NO_TIMESTAMPS_TOKEN = 50362 # <|notimestamps|>
+  TRANSLATE_TOKEN = 50358    # <|translate|>
+  TRANSCRIBE_TOKEN = 50359   # <|transcribe|>
+  NOSPEECH_TOKEN = 50362     # <|nospeech|>
+  NO_TIMESTAMPS_TOKEN = 50363 # <|notimestamps|>
   EN_TOKEN = 50259           # <|en|>
-  # For multilingual models, language tokens start at 50259
+  # Tokens to suppress from decoder output (prevents degenerate loops)
+  SUPPRESS_TOKENS = [int32(220), int32(50257)]
 
 proc getInitialTokens(cfg: WhisperConfig, language: string): seq[int32] =
   ## Build the initial prompt tokens: SOT [+ language + task] + notimestamps
@@ -454,13 +457,30 @@ proc greedyDecode*(model: WhisperModel, audioFeatures: Tensor,
   for i, t in tokensList: inputIds[i] = t
   var inputTensor = fromSeq(inputIds, [1, tokensList.len])
 
+  # For multilingual models, suppress tokens that cause degenerate loops
+  let isMultilingual = cfg.nVocab >= 51865
+
+  proc suppressAndArgmax(logitsTensor: Tensor): int32 =
+    var logitsVec = logitsTensor.toSeqF32()
+    if isMultilingual:
+      for tok in SUPPRESS_TOKENS:
+        if tok < int32(logitsVec.len):
+          logitsVec[tok] = -1e9'f32
+    var bestIdx = 0
+    var bestVal = logitsVec[0]
+    for i in 1..<logitsVec.len:
+      if logitsVec[i] > bestVal:
+        bestVal = logitsVec[i]
+        bestIdx = i
+    int32(bestIdx)
+
   let logits = model.decodeTokens(inputTensor, audioFeatures, caches)
   eval(logits)
 
   # Get last token prediction
   let lastLogits = logits.slice([0, tokensList.len - 1, 0],
                                  [1, tokensList.len, cfg.nVocab]).squeeze(0).squeeze(0)
-  let nextToken = argmax(lastLogits, axis = -1).itemInt32
+  let nextToken = suppressAndArgmax(lastLogits)
   tokensList.add(nextToken)
 
   if nextToken == int32(EOT_TOKEN):
@@ -475,7 +495,7 @@ proc greedyDecode*(model: WhisperModel, audioFeatures: Tensor,
     eval(stepLogits)
 
     let stepLast = stepLogits.slice([0, 0, 0], [1, 1, cfg.nVocab]).squeeze(0).squeeze(0)
-    let nextTok = argmax(stepLast, axis = -1).itemInt32
+    let nextTok = suppressAndArgmax(stepLast)
 
     tokensList.add(nextTok)
     if nextTok == int32(EOT_TOKEN):
@@ -581,7 +601,7 @@ proc loadWhisperMlx*(modelDir: string): WhisperModel =
   result.config = configFromJson(configData)
   let cfg = result.config
 
-  echo "Whisper config: ", cfg.nAudioState, "d, ", cfg.nAudioLayer, " enc layers, ",
+  stderr.writeLine "Whisper config: ", cfg.nAudioState, "d, ", cfg.nAudioLayer, " enc layers, ",
        cfg.nTextLayer, " dec layers, vocab=", cfg.nVocab
 
   # Load weights
@@ -591,7 +611,7 @@ proc loadWhisperMlx*(modelDir: string): WhisperModel =
       let tensors = loadSafetensors(f.path)
       for k, v in tensors:
         result.weights[k] = v
-      echo "Loaded ", tensors.len, " tensors from ", extractFilename(f.path)
+      stderr.writeLine "Loaded ", tensors.len, " tensors from ", extractFilename(f.path)
 
   # Sanitize keys (HuggingFace → MLX naming)
   result.weights = sanitizeWeights(result.weights)
@@ -605,7 +625,7 @@ proc loadWhisperMlx*(modelDir: string): WhisperModel =
   # Build causal mask for decoder
   result.causalMask = buildCausalMask(cfg.nTextCtx)
 
-  echo "Whisper MLX model loaded: ", cfg.nAudioLayer, " encoder + ",
+  stderr.writeLine "Whisper MLX model loaded: ", cfg.nAudioLayer, " encoder + ",
        cfg.nTextLayer, " decoder layers"
 
 # ── Public API (matches whisper.nim interface) ────────────────────

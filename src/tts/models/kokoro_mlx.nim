@@ -1068,7 +1068,7 @@ proc loadKokoroMlx*(modelDir: string, voice: string = "af_heart"): KokoroModel =
     found
 
   if weightsPath.len > 0:
-    echo "Loading weights: ", weightsPath
+    stderr.writeLine "Loading weights: ", weightsPath
     model.weights = loadSafetensors(weightsPath)
     # Detect quantized model (has .scales companion tensors)
     let qcfgPath = modelDir / "quantize.json"
@@ -1082,11 +1082,11 @@ proc loadKokoroMlx*(modelDir: string, voice: string = "af_heart"): KokoroModel =
       var nQuant = 0
       for k in model.weights.keys:
         if k.endsWith(".scales"): inc nQuant
-      echo "Loaded ", model.weights.len, " tensors (", nQuant, " quantized, ",
+      stderr.writeLine "Loaded ", model.weights.len, " tensors (", nQuant, " quantized, ",
            model.quantCfg.bits, "-bit)"
     else:
       model.quantCfg = QuantConfig(bits: 4, groupSize: 64, quantized: false)
-      echo "Loaded ", model.weights.len, " weight tensors"
+      stderr.writeLine "Loaded ", model.weights.len, " weight tensors"
 
   # Load voices
   let voicesDir = modelDir / "voices"
@@ -1097,7 +1097,7 @@ proc loadKokoroMlx*(modelDir: string, voice: string = "af_heart"): KokoroModel =
         let vWeights = loadSafetensors(f.path)
         if "voice" in vWeights:
           model.voices[vName] = vWeights["voice"]
-    echo "Loaded ", model.voices.len, " voices"
+    stderr.writeLine "Loaded ", model.voices.len, " voices"
 
   # Load vocab from config.json
   let configPath = modelDir / "config.json"
@@ -1106,9 +1106,9 @@ proc loadKokoroMlx*(modelDir: string, voice: string = "af_heart"): KokoroModel =
     if cfg.hasKey("vocab"):
       for key, val in cfg["vocab"]:
         model.vocab[key] = val.getInt()
-      echo "Loaded vocab: ", model.vocab.len, " tokens"
+      stderr.writeLine "Loaded vocab: ", model.vocab.len, " tokens"
   else:
-    echo "Warning: config.json not found in ", modelDir
+    stderr.writeLine "Warning: config.json not found in ", modelDir
 
   # Precompute fused weight-normed weights (eliminates norm at inference)
   model.precomputeWeights()

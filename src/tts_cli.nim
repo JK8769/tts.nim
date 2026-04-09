@@ -58,7 +58,7 @@ when defined(useMlx):
     "kokoro-en": "kokoro-mlx-q4",
     "kokoro-zh": "kokoro-zh-mlx-q4",
   }
-  const DefaultWhisper = "whisper-base-mlx"
+  const DefaultWhisper = "whisper-base.en-mlx"
   const DefaultVadModel = "silero-vad"
 else:
   const Models = {
@@ -423,25 +423,18 @@ when isMainModule:
 
     proc mcpSend(j: JsonNode) =
       let s = $j
-      stdout.write("Content-Length: " & $s.len & "\r\n\r\n" & s)
+      stdout.write(s & "\n")
       stdout.flushFile()
 
     proc mcpRecv(): JsonNode =
-      var contentLen = 0
+      var line: string
       while true:
-        var line: string
         try:
           line = stdin.readLine().strip()
         except EOFError:
           return nil
-        if line.len == 0: break
-        if line.startsWith("Content-Length:"):
-          contentLen = parseInt(line[15..^1].strip())
-      if contentLen == 0: return nil
-      var buf = newString(contentLen)
-      let read = stdin.readBuffer(addr buf[0], contentLen)
-      if read != contentLen: return nil
-      return parseJson(buf)
+        if line.len > 0:
+          return parseJson(line)
 
     proc mcpResult(id: JsonNode, res: JsonNode): JsonNode =
       %*{"jsonrpc": "2.0", "id": id, "result": res}
@@ -478,8 +471,8 @@ when isMainModule:
       {"name": "listen", "description": "Listen on the microphone until the user stops speaking. Returns transcribed text. Automatically interrupts any playing speech. Uses VAD for speech detection and Whisper for transcription.",
        "inputSchema": {"type": "object",
          "properties": {
-           "whisper_model": {"type": "string", "description": "Whisper model file", "default": "ggml-base.en.bin"},
-           "language": {"type": "string", "description": "Language code (en, zh, auto)", "default": "en"},
+           "whisper_model": {"type": "string", "description": "Whisper model name"},
+           "language": {"type": "string", "description": "Language code (en, zh, auto). Default: auto (mixed-language)", "default": "auto"},
            "timeout_ms": {"type": "integer", "description": "Max silence before giving up (ms)", "default": 10000}}}},
       {"name": "models", "description": "List downloaded TTS models",
        "inputSchema": {"type": "object", "properties": {}}}
@@ -621,16 +614,29 @@ when isMainModule:
             mic.start()
             var speechBuf: seq[float32] = @[]
             var frame = newSeq[float32](frameSize)
+            var accumBuf: seq[float32] = @[]
             var silenceFrames = 0
             var heard = false
             var parts: seq[string] = @[]
+            var noDataMs = 0
             block listenLoop:
               while true:
-                let got = mic.read(frame, frameSize)
-                if got < frameSize:
-                  sleep(5)
+                var tmp = newSeq[float32](frameSize)
+                let got = mic.read(tmp, frameSize)
+                if got > 0:
+                  accumBuf.add tmp[0..<got]
+                  noDataMs = 0
+                else:
+                  noDataMs += 2
+                  if noDataMs >= timeoutMs:
+                    break listenLoop
+                if accumBuf.len < frameSize:
+                  sleep(2)
                   continue
-                let event = v.processFrame(frame[0..<got])
+                for j in 0..<frameSize:
+                  frame[j] = accumBuf[j]
+                accumBuf = accumBuf[frameSize..^1]
+                let event = v.processFrame(frame)
                 case event
                 of veSpeechStart:
                   heard = true

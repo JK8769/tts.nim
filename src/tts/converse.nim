@@ -118,14 +118,22 @@ proc run*(cl: ConverseLoop, onTurn: ResponseCallback) =
 
   var speechBuf: seq[float32] = @[]
   var frame = newSeq[float32](frameSize)
+  var accumBuf: seq[float32] = @[]
   var silenceFrames = 0
 
   while cl.running:
-    # Read a frame from the mic
-    let got = cl.mic.read(frame, frameSize)
-    if got < frameSize:
-      sleep(5)
+    # Accumulate mic samples until we have a full VAD frame
+    var tmp = newSeq[float32](frameSize)
+    let got = cl.mic.read(tmp, frameSize)
+    if got > 0:
+      accumBuf.add tmp[0..<got]
+    if accumBuf.len < frameSize:
+      sleep(2)
       continue
+    # Extract one frame and keep the remainder
+    for j in 0..<frameSize:
+      frame[j] = accumBuf[j]
+    accumBuf = accumBuf[frameSize..^1]
 
     # Mic-mute gate: discard mic input while agent is speaking to prevent echo
     if not cl.speaker.isIdle:
@@ -133,7 +141,7 @@ proc run*(cl: ConverseLoop, onTurn: ResponseCallback) =
       speechBuf = @[]
       continue
 
-    let event = cl.vadInst.processFrame(frame[0..<got])
+    let event = cl.vadInst.processFrame(frame)
 
     case event
     of veSpeechStart:

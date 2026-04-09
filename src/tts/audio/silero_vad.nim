@@ -167,7 +167,7 @@ proc loadSileroVad*(modelDir: string, threshold: float32 = 0.5,
   result.h = zeros([1, LSTM_HIDDEN])
   result.c = zeros([1, LSTM_HIDDEN])
 
-  echo "Silero VAD loaded (threshold=", threshold, ")"
+  stderr.writeLine "Silero VAD loaded (threshold=", threshold, ")"
 
 proc reset*(v: SileroVad) =
   ## Reset LSTM state and VAD state machine.
