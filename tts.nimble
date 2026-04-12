@@ -101,6 +101,7 @@ proc downloadModel(name, file: string) =
 
 proc downloadMlxModel(name, file: string) =
   ## Download and extract a tar.gz model archive for MLX backend.
+  ## Non-fatal: logs warning on failure.
   let modelsDir = thisDir() & "/src/res/models"
   let dirName = file.replace(".tar.gz", "")
   let dest = modelsDir & "/" & dirName
@@ -110,8 +111,14 @@ proc downloadMlxModel(name, file: string) =
   mkDir modelsDir
   let repo = "JK8769/tts.nim"
   let tarball = modelsDir & "/" & file
-  downloadFile(name, "https://github.com/" & repo &
-    "/releases/latest/download/" & file, tarball, required = false)
+  let url = "https://github.com/" & repo & "/releases/latest/download/" & file
+  echo "Downloading " & name & "..."
+  try:
+    exec "curl -L --progress-bar --fail -o " & tarball & " " & url
+  except:
+    echo "  ⚠ Download failed for " & name
+    if fileExists(tarball): rmFile tarball
+    return
   if fileExists(tarball):
     exec "tar -xzf " & tarball & " -C " & modelsDir
     rmFile tarball
@@ -232,13 +239,27 @@ before install:
   if isAppleSilicon():
     echo "=== Apple Silicon detected — building MLX backend ==="
     buildMlx()
+    echo ""
+    echo "=== Downloading models (failures are non-fatal) ==="
+    downloadMlxModel("kokoro-mlx-q4", "kokoro-mlx-q4.tar.gz")
+    downloadMlxModel("kokoro-zh-mlx-q4", "kokoro-zh-mlx-q4.tar.gz")
+    downloadQwen3Asr("0.6B-4bit")
+    downloadMlxModel("silero-vad", "silero-vad.tar.gz")
   else:
     echo "=== Building GGML backend ==="
     buildGgml()
     buildWhisper()
+    echo ""
+    echo "=== Downloading models (failures are non-fatal) ==="
+    downloadFile("kokoro-en", "https://github.com/" & "JK8769/tts.nim" &
+      "/releases/latest/download/kokoro-en-q5.gguf",
+      thisDir() & "/src/res/models/kokoro-en-q5.gguf", required = false)
+    downloadFile("kokoro-zh", "https://github.com/" & "JK8769/tts.nim" &
+      "/releases/latest/download/kokoro-v1.1-zh-q5.gguf",
+      thisDir() & "/src/res/models/kokoro-v1.1-zh-q5.gguf", required = false)
   stageHeaders()
   echo ""
-  echo "=== Install complete. Run 'tts_cli download' to fetch models. ==="
+  echo "=== If any models failed, run: tts_cli download ==="
 
 task build_deps, "Build native deps (auto-detects platform: MLX on Apple Silicon, GGML elsewhere)":
   ensureSubmodules()
