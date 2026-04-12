@@ -7,7 +7,7 @@
 ##   tts_cli serve       # MCP stdio server for AI agents
 ##   tts_cli models
 
-import std/[os, strutils, strformat, sequtils, json, algorithm, terminal, times, posix, math, osproc]
+import std/[os, strutils, strformat, sequtils, json, algorithm, terminal, times, posix, math, osproc, tables]
 import tts/common
 import tts/engine
 import tts/audio/device
@@ -73,6 +73,46 @@ const Repo = "JK8769/tts.nim"
 
 proc isTTSModel(name: string): bool =
   name.startsWith("kokoro")
+
+const pkgVoicesDir = pkgRoot / "res" / "voices"
+
+proc loadVoiceDescriptions(modelDir: string): Table[string, JsonNode] =
+  ## Load voice descriptions from voices.json in model dir or res/voices/.
+  result = initTable[string, JsonNode]()
+  # First try model-local voices.json
+  let localPath = modelDir / "voices.json"
+  if fileExists(localPath):
+    try:
+      for k, v in parseJson(readFile(localPath)):
+        result[k] = v
+      return
+    except: discard
+  # Fallback: match model name to res/voices/ file
+  let modelName = extractFilename(modelDir)
+  for prefix in ["kokoro-en", "kokoro-zh"]:
+    if modelName.contains(prefix.replace("-", "")):
+      let fallback = pkgVoicesDir / (prefix & ".json")
+      if fileExists(fallback):
+        try:
+          for k, v in parseJson(readFile(fallback)):
+            result[k] = v
+          return
+        except: discard
+  # Try matching by language prefix in model name
+  if modelName.contains("zh"):
+    let fallback = pkgVoicesDir / "kokoro-zh.json"
+    if fileExists(fallback):
+      try:
+        for k, v in parseJson(readFile(fallback)):
+          result[k] = v
+      except: discard
+  else:
+    let fallback = pkgVoicesDir / "kokoro-en.json"
+    if fileExists(fallback):
+      try:
+        for k, v in parseJson(readFile(fallback)):
+          result[k] = v
+      except: discard
 
 proc listModels(asJson: bool) =
   if dirExists(pkgModelDir):
@@ -415,6 +455,8 @@ when isMainModule:
           e.loadModel(f.path, "af_heart")
           allVoices = e.listVoices()
           e.close()
+        # Load voice descriptions if available
+        let voiceDesc = loadVoiceDescriptions(f.path)
         var filtered: seq[string]
         for v in allVoices:
           if matchVoice(v, wantMale, wantFemale, wantEn, wantZh):
@@ -424,11 +466,25 @@ when isMainModule:
           if jsonOut:
             var jVoices = newJArray()
             for v in filtered:
-              jVoices.add %*{"name": v, "language": voiceLang(v), "gender": voiceGender(v)}
+              var entry = %*{"name": v, "language": voiceLang(v), "gender": voiceGender(v)}
+              if v in voiceDesc:
+                entry["description"] = voiceDesc[v].getOrDefault("description")
+                entry["pitch"] = voiceDesc[v].getOrDefault("pitch")
+                entry["energy"] = voiceDesc[v].getOrDefault("energy")
+                entry["brightness"] = voiceDesc[v].getOrDefault("brightness")
+              jVoices.add entry
             jsonModels.add %*{"model": name, "voices": jVoices}
           else:
             echo name, " (", filtered.len, " voices):"
-            printColumns(filtered)
+            if voiceDesc.len > 0:
+              for v in filtered:
+                if v in voiceDesc:
+                  let d = voiceDesc[v].getOrDefault("description").getStr("")
+                  echo "  ", v, "  ", d
+                else:
+                  echo "  ", v
+            else:
+              printColumns(filtered)
       if jsonOut:
         echo jsonModels.pretty
     else:
@@ -1113,6 +1169,15 @@ when isMainModule:
                 let name = extractFilename(f.path)
                 if not name.isTTSModel: continue
                 if model.len > 0 and name != model: continue
+                # Load voice descriptions if available
+                var voiceDesc = initTable[string, JsonNode]()
+                let descPath = f.path / "voices.json"
+                if fileExists(descPath):
+                  try:
+                    let dj = parseJson(readFile(descPath))
+                    for k, v in dj:
+                      voiceDesc[k] = v
+                  except: discard
                 # Scan voice files directly — no need to load the whole model
                 let voicesDir = f.path / "voices"
                 var filtered: seq[string]
@@ -1126,7 +1191,10 @@ when isMainModule:
                 if filtered.len > 0:
                   var jv = newJArray()
                   for v in filtered:
-                    jv.add %*{"name": v, "language": voiceLang(v), "gender": voiceGender(v)}
+                    var entry = %*{"name": v, "language": voiceLang(v), "gender": voiceGender(v)}
+                    if v in voiceDesc:
+                      entry["description"] = voiceDesc[v].getOrDefault("description")
+                    jv.add entry
                   jsonModels.add %*{"model": name, "voices": jv}
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $jsonModels}]}))
           elif toolName == "speak":
