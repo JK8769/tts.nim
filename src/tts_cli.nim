@@ -71,6 +71,9 @@ else:
   const STT_RATE = WHISPER_SAMPLE_RATE
 const Repo = "JK8769/tts.nim"
 
+proc isTTSModel(name: string): bool =
+  name.startsWith("kokoro")
+
 proc listModels(asJson: bool) =
   if dirExists(pkgModelDir):
     var jsonArr = newJArray()
@@ -80,13 +83,13 @@ proc listModels(asJson: bool) =
         # MLX models are directories with safetensors
         if f.kind == pcDir:
           let name = extractFilename(f.path)
+          if not name.isTTSModel: continue
+          let voicesDir = f.path / "voices"
           var voiceCount = 0
-          try:
-            var e = newTTSEngine()
-            e.loadModel(f.path, "af_heart")
-            voiceCount = e.listVoices().len
-            e.close()
-          except: discard
+          if dirExists(voicesDir):
+            for v in walkDir(voicesDir):
+              if v.path.endsWith(".safetensors") or v.path.endsWith(".bin"):
+                inc voiceCount
           if voiceCount > 0:
             inc count
             if asJson:
@@ -114,13 +117,13 @@ proc listModels(asJson: bool) =
     if asJson:
       echo jsonArr.pretty
     elif count == 0:
-      echo "  (empty — run: tts_cli download kokoro-en)"
+      echo "  (empty — run: tts_cli download)"
   else:
     if asJson:
       echo newJArray().pretty
     else:
       echo "Models dir: ", pkgModelDir
-      echo "  (empty — run: tts_cli download kokoro-en)"
+      echo "  (empty — run: tts_cli download)"
 
 proc downloadTarball(name, tarFile: string) =
   ## Download and extract a tar.gz from GitHub releases.
@@ -398,10 +401,20 @@ when isMainModule:
         else:
           if not f.path.endsWith(".gguf"): continue
         let name = extractFilename(f.path)
+        if not name.isTTSModel: continue
         if filterModel and name != model: continue
-        var e = newTTSEngine()
-        e.loadModel(f.path, "af_heart")
-        let allVoices = e.listVoices()
+        var allVoices: seq[string]
+        when defined(useMlx):
+          let voicesDir = f.path / "voices"
+          if dirExists(voicesDir):
+            for v in walkDir(voicesDir):
+              if v.path.endsWith(".safetensors") or v.path.endsWith(".bin"):
+                allVoices.add extractFilename(v.path).split('.')[0]
+        else:
+          var e = newTTSEngine()
+          e.loadModel(f.path, "af_heart")
+          allVoices = e.listVoices()
+          e.close()
         var filtered: seq[string]
         for v in allVoices:
           if matchVoice(v, wantMale, wantFemale, wantEn, wantZh):
@@ -416,7 +429,6 @@ when isMainModule:
           else:
             echo name, " (", filtered.len, " voices):"
             printColumns(filtered)
-        e.close()
       if jsonOut:
         echo jsonModels.pretty
     else:
@@ -1096,11 +1108,10 @@ when isMainModule:
               for f in walkDir(pkgModelDir):
                 when defined(useMlx):
                   if f.kind != pcDir: continue
-                  # Only TTS model dirs (kokoro-*), skip STT/VAD/other models
-                  if not extractFilename(f.path).startsWith("kokoro"): continue
                 else:
                   if not f.path.endsWith(".gguf"): continue
                 let name = extractFilename(f.path)
+                if not name.isTTSModel: continue
                 if model.len > 0 and name != model: continue
                 # Scan voice files directly — no need to load the whole model
                 let voicesDir = f.path / "voices"
@@ -1573,13 +1584,21 @@ when isMainModule:
                 else:
                   if not f.path.endsWith(".gguf"): continue
                 let name = extractFilename(f.path)
+                if not name.isTTSModel: continue
                 var vc = 0
-                try:
-                  var eng = newTTSEngine()
-                  eng.loadModel(f.path, "af_heart")
-                  vc = eng.listVoices().len
-                  eng.close()
-                except: discard
+                when defined(useMlx):
+                  let voicesDir = f.path / "voices"
+                  if dirExists(voicesDir):
+                    for v in walkDir(voicesDir):
+                      if v.path.endsWith(".safetensors") or v.path.endsWith(".bin"):
+                        inc vc
+                else:
+                  try:
+                    var eng = newTTSEngine()
+                    eng.loadModel(f.path, "af_heart")
+                    vc = eng.listVoices().len
+                    eng.close()
+                  except: discard
                 if vc > 0:
                   when defined(useMlx):
                     arr.add %*{"model": name, "voices": vc}
