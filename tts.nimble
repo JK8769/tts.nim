@@ -116,6 +116,34 @@ proc downloadMlxModel(name, file: string) =
     exec "tar -xzf " & tarball & " -C " & modelsDir
     rmFile tarball
 
+proc downloadQwen3Asr(variant: string) =
+  ## Download Qwen3-ASR model: try GitHub releases tar.gz first, fall back to HuggingFace.
+  let dirName = "qwen3-asr-" & variant.toLowerAscii()
+  let modelsDir = thisDir() & "/src/res/models"
+  let dest = modelsDir & "/" & dirName
+  if dirExists(dest) and fileExists(dest & "/model.safetensors"):
+    echo dirName & " ✓"
+    return
+  # Try GitHub releases first (single tar.gz download)
+  mkDir modelsDir
+  let repo = "JK8769/tts.nim"
+  let tarball = modelsDir & "/" & dirName & ".tar.gz"
+  downloadFile(dirName, "https://github.com/" & repo &
+    "/releases/latest/download/" & dirName & ".tar.gz", tarball, required = false)
+  if fileExists(tarball):
+    exec "tar -xzf " & tarball & " -C " & modelsDir
+    rmFile tarball
+    if dirExists(dest) and fileExists(dest & "/model.safetensors"):
+      echo dirName & " ✓ (from GitHub releases)"
+      return
+  # Fall back to HuggingFace (individual file downloads)
+  echo dirName & " — falling back to HuggingFace..."
+  mkDir dest
+  let base = "https://huggingface.co/mlx-community/Qwen3-ASR-" & variant & "/resolve/main"
+  for f in @["config.json", "model.safetensors", "vocab.json",
+             "merges.txt", "tokenizer_config.json", "generation_config.json"]:
+    downloadFile(dirName & "/" & f, base & "/" & f, dest & "/" & f, required = false)
+
 proc downloadWhisperMlx() =
   ## Download Whisper base.en model (safetensors) from HuggingFace.
   ## Uses English-only model — multilingual requires mel spectrogram alignment work.
@@ -202,7 +230,7 @@ before install:
     buildMlx()
     downloadMlxModel("kokoro-mlx-q4", "kokoro-mlx-q4.tar.gz")
     downloadMlxModel("kokoro-zh-mlx-q4", "kokoro-zh-mlx-q4.tar.gz")
-    downloadWhisperMlx()
+    downloadQwen3Asr("0.6B-4bit")
     downloadMlxModel("silero-vad", "silero-vad.tar.gz")
   else:
     echo "=== Building GGML backend ==="
@@ -233,7 +261,8 @@ task download, "Download models (auto-detects platform)":
   if isAppleSilicon():
     downloadMlxModel("kokoro-mlx-q4", "kokoro-mlx-q4.tar.gz")
     downloadMlxModel("kokoro-zh-mlx-q4", "kokoro-zh-mlx-q4.tar.gz")
-    downloadWhisperMlx()
+    downloadQwen3Asr("0.6B-8bit")
+    downloadQwen3Asr("0.6B-4bit")
     downloadMlxModel("silero-vad", "silero-vad.tar.gz")
   else:
     downloadModel("kokoro-en", "kokoro-en-q5.gguf")

@@ -31,6 +31,7 @@ Usage:
   tts_cli models [--json]
   tts_cli converse [-m <model>] [-v <voice>] [-s <speed>] [--whisper <wmodel>] [--lang <lang>] [--greeting <text>]
   tts_cli serve
+  tts_cli mcp [--print]
   tts_cli schema [--per-command]
   tts_cli (-h | --help)
 
@@ -47,6 +48,7 @@ Options:
   --zh                   Show only Chinese voices.
   --json                 Output as JSON (for agent/programmatic use).
   --per-command           Output per-command schema.
+  --print                 Print MCP config JSON to stdout instead of writing .mcp.json.
   --whisper <wmodel>     Whisper model for STT [default: auto].
   --lang <lang>          Language for speech recognition [default: auto].
   --greeting <text>      Greeting spoken at conversation start.
@@ -58,7 +60,7 @@ when defined(useMlx):
     "kokoro-en": "kokoro-mlx-q4",
     "kokoro-zh": "kokoro-zh-mlx-q4",
   }
-  const DefaultQwen3Asr = "qwen3-asr-0.6b-8bit"
+  const DefaultQwen3Asr = "qwen3-asr-0.6b-4bit"
   const STT_RATE = QWEN3_SAMPLE_RATE
 else:
   const Models = {
@@ -1931,6 +1933,24 @@ when isMainModule:
         mcpSend(mcpResult(id, %*{}))
       else:
         mcpSend(mcpError(id, -32601, "method not found: " & methStr))
+
+  elif args.isCommand("mcp"):
+    let binaryPath = getAppFilename()
+    let config = %*{
+      "mcpServers": {
+        "tts": {
+          "command": binaryPath,
+          "args": ["serve"]
+        }
+      }
+    }
+    if args["--print"]:
+      echo config.pretty
+    else:
+      let dest = getCurrentDir() / ".mcp.json"
+      writeFile(dest, config.pretty & "\n")
+      echo "Wrote ", dest
+      echo "  command: ", binaryPath, " serve"
 
   elif args.isCommand("schema"):
     if args["--per-command"]:

@@ -648,15 +648,20 @@ proc loadQwen3Asr*(modelDir: string): Qwen3Asr =
   result.ropeFreqs = buildRopeFreqs(result.cfg.text.headDim, 8192,
                                      result.cfg.text.ropeTheta)
 
-  # Load tokenizer
+  # Load tokenizer — tokens.json (id→token) or vocab.json (token→id)
+  result.tokens = initTable[int, string]()
   let tokensPath = modelDir / "tokens.json"
+  let vocabPath = modelDir / "vocab.json"
   if fileExists(tokensPath):
     let tokJ = parseJson(readFile(tokensPath))
-    result.tokens = initTable[int, string]()
     for k, v in tokJ:
       result.tokens[parseInt(k)] = v.getStr()
+  elif fileExists(vocabPath):
+    let vocJ = parseJson(readFile(vocabPath))
+    for tok, idNode in vocJ:
+      result.tokens[idNode.getInt()] = tok
   else:
-    stderr.writeLine "WARNING: tokens.json not found, decoding will fail"
+    stderr.writeLine "WARNING: tokens.json/vocab.json not found, decoding will fail"
 
   # Precomputed prompt token IDs
   result.promptPrefix = @[151644'i32, 8948, 198, 151645, 198, 151644, 872, 198, 151669]
