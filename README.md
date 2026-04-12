@@ -15,9 +15,9 @@ Native text-to-speech, speech-to-text, and video rendering engine for Nim. Uses 
 
 ## Demo
 
-<video src="https://github.com/JK8769/tts.nim/releases/download/v0.2.0/test_video.mp4" controls width="640"></video>
+[![Demo video](docs/demo.gif)](https://github.com/JK8769/tts.nim/releases/download/v0.2.0/test_video.mp4)
 
-A short script rendered with the `script` MCP tool — TTS audio + Remotion video with radio studio visuals, speaker panels, mood-reactive orb, and timed subtitles.
+*Click to watch full video with audio.* A short script rendered with the `script` MCP tool — TTS audio + Remotion video with radio studio visuals, speaker panels, mood-reactive orb, and timed subtitles.
 
 ## Quick start
 
