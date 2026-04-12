@@ -122,28 +122,123 @@ proc listModels(asJson: bool) =
       echo "Models dir: ", pkgModelDir
       echo "  (empty — run: tts_cli download kokoro-en)"
 
+proc downloadTarball(name, tarFile: string) =
+  ## Download and extract a tar.gz from GitHub releases.
+  let dest = pkgModelDir / tarFile.replace(".tar.gz", "")
+  if dirExists(dest):
+    echo name, " ✓"
+    return
+  createDir(pkgModelDir)
+  let tarball = pkgModelDir / tarFile
+  let url = "https://github.com/" & Repo & "/releases/latest/download/" & tarFile
+  echo "Downloading ", name, "..."
+  let code = execShellCmd("curl -L --progress-bar --fail -o " &
+                          quoteShell(tarball) & " " & quoteShell(url))
+  if code != 0:
+    removeFile(tarball)
+    echo "  ⚠ Failed: ", name
+    return
+  let extractCode = execShellCmd("tar -xzf " & quoteShell(tarball) & " -C " & quoteShell(pkgModelDir))
+  removeFile(tarball)
+  if extractCode != 0:
+    echo "  ⚠ Extract failed: ", name
+  else:
+    echo name, " ✓"
+
+proc downloadHfModel(name, hfRepo: string, files: seq[string]) =
+  ## Download model files from HuggingFace.
+  let dest = pkgModelDir / name
+  if dirExists(dest) and fileExists(dest / "model.safetensors"):
+    echo name, " ✓"
+    return
+  createDir(dest)
+  let base = "https://huggingface.co/" & hfRepo & "/resolve/main"
+  for f in files:
+    let fDest = dest / f
+    if fileExists(fDest): continue
+    echo "  ", name, "/", f
+    let code = execShellCmd("curl -L --progress-bar --fail -o " &
+                            quoteShell(fDest) & " " & quoteShell(base & "/" & f))
+    if code != 0:
+      removeFile(fDest)
+      echo "  ⚠ Failed: ", f
+
+proc downloadQwen3Asr(variant: string) =
+  ## Download Qwen3-ASR: try GitHub releases first, fall back to HuggingFace.
+  let dirName = "qwen3-asr-" & variant.toLowerAscii()
+  let dest = pkgModelDir / dirName
+  if dirExists(dest) and fileExists(dest / "model.safetensors"):
+    echo dirName, " ✓"
+    return
+  # Try GitHub releases first
+  downloadTarball(dirName, dirName & ".tar.gz")
+  if dirExists(dest) and fileExists(dest / "model.safetensors"):
+    return
+  # Fall back to HuggingFace
+  echo dirName, " — trying HuggingFace..."
+  downloadHfModel(dirName, "mlx-community/Qwen3-ASR-" & variant,
+                  @["config.json", "model.safetensors", "vocab.json"])
+
 proc downloadModel(name: string) =
   createDir(pkgModelDir)
+  when defined(useMlx):
+    const allModels = @["kokoro-en", "kokoro-zh", "qwen3-asr", "silero-vad"]
+  else:
+    const allModels = @["kokoro-en", "kokoro-zh"]
   if name.len == 0:
-    echo "Available: kokoro-en, kokoro-zh"
+    # Download all models
+    when defined(useMlx):
+      for (k, v) in Models:
+        downloadTarball(k, v & ".tar.gz")
+      downloadQwen3Asr("0.6B-4bit")
+      downloadTarball("silero-vad", "silero-vad.tar.gz")
+    else:
+      for (k, v) in Models:
+        let dest = pkgModelDir / v
+        if fileExists(dest):
+          echo k, " ✓"
+        else:
+          echo "Downloading ", k, "..."
+          let url = "https://github.com/" & Repo & "/releases/latest/download/" & v
+          let code = execShellCmd("curl -L --progress-bar --fail -o " &
+                                  quoteShell(dest) & " " & quoteShell(url))
+          if code != 0: removeFile(dest); echo "  ⚠ Failed: ", k
     return
-  var file = ""
-  for (k, v) in Models:
-    if k == name: file = v
-  if file.len == 0:
-    echo "Unknown model: ", name, " (available: kokoro-en, kokoro-zh)"
-    quit(1)
-  let dest = pkgModelDir / file
-  if fileExists(dest):
-    echo name, " ✓ ", dest
-    return
-  let url = "https://github.com/" & Repo & "/releases/latest/download/" & file
-  echo "Downloading ", name, " → ", dest
-  let code = execShellCmd("curl -L --progress-bar --fail -o " &
-                          quoteShell(dest) & " " & quoteShell(url))
-  if code != 0:
-    removeFile(dest)
-    echo "Failed. Download manually from: https://github.com/", Repo, "/releases"
+  # Download specific model
+  case name
+  of "kokoro-en", "kokoro-zh":
+    var file = ""
+    for (k, v) in Models:
+      if k == name: file = v
+    when defined(useMlx):
+      downloadTarball(name, file & ".tar.gz")
+    else:
+      let dest = pkgModelDir / file
+      if fileExists(dest):
+        echo name, " ✓"
+      else:
+        echo "Downloading ", name, "..."
+        let url = "https://github.com/" & Repo & "/releases/latest/download/" & file
+        discard execShellCmd("curl -L --progress-bar --fail -o " &
+                             quoteShell(dest) & " " & quoteShell(url))
+  of "qwen3-asr":
+    when defined(useMlx):
+      downloadQwen3Asr("0.6B-4bit")
+    else:
+      echo "Qwen3-ASR requires Apple Silicon (MLX backend)"
+  of "qwen3-asr-8bit":
+    when defined(useMlx):
+      downloadQwen3Asr("0.6B-8bit")
+    else:
+      echo "Qwen3-ASR requires Apple Silicon (MLX backend)"
+  of "silero-vad":
+    when defined(useMlx):
+      downloadTarball("silero-vad", "silero-vad.tar.gz")
+    else:
+      echo "Silero VAD requires Apple Silicon (MLX backend)"
+  else:
+    echo "Unknown model: ", name
+    echo "Available: ", allModels.join(", ")
     quit(1)
 
 proc resolveModel(name: string): string =

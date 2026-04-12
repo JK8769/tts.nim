@@ -232,18 +232,13 @@ before install:
   if isAppleSilicon():
     echo "=== Apple Silicon detected — building MLX backend ==="
     buildMlx()
-    downloadMlxModel("kokoro-mlx-q4", "kokoro-mlx-q4.tar.gz")
-    downloadMlxModel("kokoro-zh-mlx-q4", "kokoro-zh-mlx-q4.tar.gz")
-    downloadQwen3Asr("0.6B-4bit")
-    downloadMlxModel("silero-vad", "silero-vad.tar.gz")
   else:
     echo "=== Building GGML backend ==="
     buildGgml()
     buildWhisper()
-    downloadModel("kokoro-en", "kokoro-en-q5.gguf")
-    downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
-    downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
   stageHeaders()
+  echo ""
+  echo "=== Install complete. Run 'tts_cli download' to fetch models. ==="
 
 task build_deps, "Build native deps (auto-detects platform: MLX on Apple Silicon, GGML elsewhere)":
   ensureSubmodules()

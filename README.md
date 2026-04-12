@@ -25,9 +25,12 @@ Native text-to-speech, speech-to-text, and video rendering engine for Nim. Uses 
 
 ```bash
 nimble install https://github.com/JK8769/tts.nim
+tts_cli download        # download all models (~1GB)
 ```
 
-Builds native deps, downloads models, and installs `tts_cli`. Requires: Nim 2.0+, CMake, a C compiler. Platform is auto-detected — Apple Silicon builds the MLX backend, everything else builds GGML.
+Install builds native deps and installs `tts_cli`. Models are downloaded separately so the install doesn't fail on network issues. Requires: Nim 2.0+, CMake, a C compiler. Platform is auto-detected — Apple Silicon builds the MLX backend, everything else builds GGML.
+
+You can also download specific models: `tts_cli download kokoro-en`, `tts_cli download qwen3-asr`.
 
 ### CLI
 
