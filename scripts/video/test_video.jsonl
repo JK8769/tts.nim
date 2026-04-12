@@ -1,0 +1,8 @@
+{"type":"header","title":"Video Test","format":"show","created":"2026-04-12T12:34:00","cast":{"Alice":"af_heart","Bob":"am_adam"},"defaults":{"pause":0.4,"narrator_voice":"af_nicole"}}
+{"type":"chapter","text":"Chapter 1: Hello"}
+{"type":"scene","text":"A cozy living room. Alice is reading on the couch.","setting":"living room","characters":["Alice"],"mood":"warm","narrate":true}
+{"type":"line","name":"Alice","text":"Hey Bob, did you see the news today? Apparently they found water on Mars."}
+{"type":"line","name":"Bob","text":"No way! That's incredible. I've always wanted to visit Mars."}
+{"type":"scene","text":"Alice laughs and throws a pillow at Bob.","setting":"living room","characters":["Alice","Bob"],"mood":"playful"}
+{"type":"line","name":"Alice","text":"You can barely handle a road trip to the beach, let alone Mars."}
+{"type":"line","name":"Bob","text":"Fair point. But a man can dream, right?"}

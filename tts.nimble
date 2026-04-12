@@ -240,6 +240,13 @@ task download, "Download models (auto-detects platform)":
     downloadModel("kokoro-zh", "kokoro-v1.1-zh-q5.gguf")
     downloadWhisperModel("whisper-base.en", "ggml-base.en.bin")
 
+task voices, "Download all English voices from HuggingFace (requires torch, safetensors)":
+  let modelsDir = thisDir() & "/src/res/models"
+  for model in ["kokoro-mlx", "kokoro-mlx-q4"]:
+    let dir = modelsDir & "/" & model
+    if dirExists(dir):
+      exec "python3 " & thisDir() & "/scripts/download_voices.py " & dir & " --english-only"
+
 proc basename(path: string): string =
   let i = path.rfind('/')
   if i >= 0: path[i+1..^1] else: path

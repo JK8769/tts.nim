@@ -311,6 +311,10 @@ proc mlx_conv1d*(res: ptr MlxArray, input, weight: MlxArray,
 proc mlx_conv_transpose1d*(res: ptr MlxArray, input, weight: MlxArray,
                             stride, padding, dilation, output_padding, groups: cint,
                             s: MlxStream): cint {.importc, header: opsH.}
+proc mlx_conv2d*(res: ptr MlxArray, input, weight: MlxArray,
+                  stride_0, stride_1, padding_0, padding_1,
+                  dilation_0, dilation_1, groups: cint,
+                  s: MlxStream): cint {.importc, header: opsH.}
 
 # ── Shape manipulation ───────────────────────────────────────────
 

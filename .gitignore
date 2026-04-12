@@ -13,3 +13,29 @@ src/lib/
 src/include/
 src/res/data/espeak/
 src/res/models/
+*.mp3
+*.mp4
+*.out
+tts_cli
+.mcp.json
+src/tts/mlx/mlx
+src/tts/audio/silero_vad
+
+# Scripts
+scripts/.remotion-work/
+scripts/**/*_result.json
+scripts/**/*.timeline.json
+
+# Remotion (scripts working copy & template)
+scripts/video/remotion/node_modules/
+scripts/video/remotion/out/
+scripts/video/remotion/public/audio.mp3
+scripts/video/remotion/src/data.json
+scripts/video/remotion/bun.lock
+scripts/video/remotion/bun.lockb
+src/res/video-template/node_modules/
+src/res/video-template/out/
+src/res/video-template/public/audio.mp3
+src/res/video-template/src/data.json
+src/res/video-template/bun.lock
+src/res/video-template/bun.lockb

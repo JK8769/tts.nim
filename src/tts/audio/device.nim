@@ -27,15 +27,28 @@ proc ma_playback_stop(p: MaPlaybackPtr): cint {.importc, header: "ma_bridge.h".}
 proc ma_playback_is_idle(p: MaPlaybackPtr): cint {.importc, header: "ma_bridge.h".}
 proc ma_playback_frames_queued(p: MaPlaybackPtr): uint32 {.importc, header: "ma_bridge.h".}
 proc ma_playback_flush(p: MaPlaybackPtr) {.importc, header: "ma_bridge.h".}
+proc ma_playback_set_mute(p: MaPlaybackPtr, mute: cint) {.importc, header: "ma_bridge.h".}
 proc ma_playback_destroy(p: MaPlaybackPtr) {.importc, header: "ma_bridge.h".}
 
 # ---- Capture FFI ----
 proc ma_capture_create(sampleRate: uint32): MaCapturePtr {.importc, header: "ma_bridge.h".}
+proc ma_capture_create_aec(sampleRate: uint32): MaCapturePtr {.importc, header: "ma_bridge.h".}
 proc ma_capture_read(c: MaCapturePtr, samples: ptr float32, frameCount: uint32): uint32 {.importc, header: "ma_bridge.h".}
 proc ma_capture_start(c: MaCapturePtr): cint {.importc, header: "ma_bridge.h".}
 proc ma_capture_stop(c: MaCapturePtr): cint {.importc, header: "ma_bridge.h".}
 proc ma_capture_frames_available(c: MaCapturePtr): uint32 {.importc, header: "ma_bridge.h".}
+proc ma_capture_flush(c: MaCapturePtr) {.importc, header: "ma_bridge.h".}
+proc ma_capture_set_speech_detect(c: MaCapturePtr, threshold: cfloat) {.importc, header: "ma_bridge.h".}
+proc ma_capture_set_speech_range(c: MaCapturePtr, low: cfloat, high: cfloat) {.importc, header: "ma_bridge.h".}
+proc ma_capture_speech_detected(c: MaCapturePtr): cint {.importc, header: "ma_bridge.h".}
+proc ma_capture_speech_frames(c: MaCapturePtr): uint32 {.importc, header: "ma_bridge.h".}
+proc ma_capture_speech_reset(c: MaCapturePtr) {.importc, header: "ma_bridge.h".}
 proc ma_capture_destroy(c: MaCapturePtr) {.importc, header: "ma_bridge.h".}
+
+# ---- Duplex FFI ----
+proc ma_duplex_create_vpio(playbackRate, captureRate: uint32,
+    outPlayback: ptr MaPlaybackPtr, outCapture: ptr MaCapturePtr): cint
+    {.importc, header: "ma_bridge.h".}
 
 # ---- Nim API ----
 
@@ -86,6 +99,10 @@ proc flush*(p: AudioPlayback) =
   ## Discard all buffered audio (for interrupt).
   ma_playback_flush(p.handle)
 
+proc setMute*(p: AudioPlayback, mute: bool) =
+  ## Mux ring buffer output: true=silence (data preserved), false=real audio.
+  ma_playback_set_mute(p.handle, if mute: 1 else: 0)
+
 proc close*(p: AudioPlayback) =
   if p.handle != nil:
     ma_playback_destroy(p.handle)
@@ -103,8 +120,11 @@ proc waitUntilDone*(p: AudioPlayback) =
 
 # ---- Capture ----
 
-proc newAudioCapture*(sampleRate: uint32 = 24000): AudioCapture =
-  let h = ma_capture_create(sampleRate)
+proc newAudioCapture*(sampleRate: uint32 = 24000, aec: bool = false): AudioCapture =
+  ## Create a capture device. When aec=true on macOS, uses Apple's
+  ## VoiceProcessingIO for hardware echo cancellation.
+  let h = if aec: ma_capture_create_aec(sampleRate)
+          else: ma_capture_create(sampleRate)
   if h == nil:
     raise newException(IOError, "Failed to create audio capture device")
   result = AudioCapture(handle: h, sampleRate: sampleRate)
@@ -124,7 +144,51 @@ proc stop*(c: AudioCapture) =
 proc framesAvailable*(c: AudioCapture): int =
   ma_capture_frames_available(c.handle).int
 
+proc flush*(c: AudioCapture) =
+  ## Discard all buffered capture audio.
+  ma_capture_flush(c.handle)
+
+proc setSpeechDetect*(c: AudioCapture, threshold: float32 = 0.02) =
+  ## Enable energy-based speech detection in the capture thread.
+  ## threshold: RMS energy level (0.01-0.05 typical). 0 to disable.
+  ma_capture_set_speech_detect(c.handle, threshold)
+
+proc setSpeechRange*(c: AudioCapture, low: float32, high: float32) =
+  ## Set speech energy band [low, high]. Only triggers when RMS falls within range.
+  ## Rejects quiet noise (below low) and loud transients (above high).
+  ma_capture_set_speech_range(c.handle, low, high)
+
+proc speechDetected*(c: AudioCapture): bool =
+  ## Returns true if speech was detected since last reset. Lock-free.
+  ma_capture_speech_detected(c.handle) != 0
+
+proc speechFrames*(c: AudioCapture): uint32 =
+  ## Monotonic count of capture buffers that exceeded the energy threshold.
+  ma_capture_speech_frames(c.handle)
+
+proc speechReset*(c: AudioCapture) =
+  ## Reset the speech detection flag.
+  ma_capture_speech_reset(c.handle)
+
 proc close*(c: AudioCapture) =
   if c.handle != nil:
     ma_capture_destroy(c.handle)
     c.handle = nil
+
+# ---- Duplex ----
+
+proc newAudioDuplex*(playbackRate: uint32 = 24000,
+                     captureRate: uint32 = 16000):
+    tuple[playback: AudioPlayback, capture: AudioCapture] =
+  ## Create paired playback + capture through Apple's VoiceProcessingIO.
+  ## Both handles share a single VPIO audio unit for optimal echo cancellation.
+  ## On non-macOS, falls back to separate devices with standalone AEC capture.
+  var ph: MaPlaybackPtr
+  var ch: MaCapturePtr
+  if ma_duplex_create_vpio(playbackRate, captureRate, addr ph, addr ch) == 0:
+    result.playback = AudioPlayback(handle: ph, sampleRate: playbackRate)
+    result.capture = AudioCapture(handle: ch, sampleRate: captureRate)
+  else:
+    # Fallback: separate devices
+    result.playback = newAudioPlayback(playbackRate)
+    result.capture = newAudioCapture(captureRate, aec = true)

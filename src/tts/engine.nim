@@ -1,7 +1,7 @@
 ## Unified TTS engine — loads models and synthesizes speech.
 ## Supports both GGML (.gguf) and MLX (safetensors) backends.
 
-import std/os
+import std/[os, tables]
 import common
 
 when defined(useMlx):
@@ -15,25 +15,39 @@ type
   TTSEngine* = ref object
     when defined(useMlx):
       mlxModel: KokoroModel
+      modelCache: Table[string, KokoroModel]
     else:
       kokoro: KokoroModel
     loaded: bool
+    currentModelPath*: string
 
 proc newTTSEngine*(): TTSEngine =
-  TTSEngine(loaded: false)
+  when defined(useMlx):
+    TTSEngine(loaded: false, modelCache: initTable[string, KokoroModel]())
+  else:
+    TTSEngine(loaded: false)
 
 proc loadModel*(e: TTSEngine, path: string, voice: string = "af_heart") =
   ## Load a model. For MLX: path is a directory with safetensors.
   ## For GGML: path is a .gguf file.
   when defined(useMlx):
-    if e.loaded:
-      e.mlxModel.close()
     let resolved = if dirExists(path): path
                    else: findModel(path)
     if resolved.len == 0:
       raise newException(IOError, "Model not found: " & path)
-    e.mlxModel = loadKokoroMlx(resolved, voice)
+    if e.loaded and e.currentModelPath == resolved:
+      return  # same model already loaded, skip reload
+    # Cache the current model before switching
+    if e.loaded:
+      e.modelCache[e.currentModelPath] = e.mlxModel
+    # Check cache for the requested model
+    if resolved in e.modelCache:
+      e.mlxModel = e.modelCache[resolved]
+      stderr.writeLine "Restored cached model: ", resolved.extractFilename
+    else:
+      e.mlxModel = loadKokoroMlx(resolved, voice)
     e.loaded = true
+    e.currentModelPath = resolved
   else:
     let resolved = findModel(path)
     if resolved.len == 0:
@@ -41,11 +55,14 @@ proc loadModel*(e: TTSEngine, path: string, voice: string = "af_heart") =
         "Model not found: " & path & "\n" &
         "  Searched: ./, " & pkgModelDir & "/\n" &
         "  Run: tts_cli download kokoro-en")
+    if e.loaded and e.currentModelPath == resolved:
+      return  # same model already loaded, skip reload
     if e.loaded:
       e.kokoro.close()
     e.kokoro = loadKokoro(resolved, voice)
     e.kokoro.postLoadInit()
     e.loaded = true
+    e.currentModelPath = resolved
 
 proc isLoaded*(e: TTSEngine): bool = e.loaded
 

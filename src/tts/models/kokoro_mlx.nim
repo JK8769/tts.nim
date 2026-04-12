@@ -1121,10 +1121,27 @@ proc loadKokoroMlx*(modelDir: string, voice: string = "af_heart"): KokoroModel =
 
 # ── High-level API ───────────────────────────────────────────────
 
+proc splitSentencesSimple(text: string): seq[string] =
+  ## Split text on sentence boundaries (. ! ?) for chunked synthesis.
+  var cur = ""
+  var i = 0
+  while i < text.len:
+    cur.add text[i]
+    if text[i] in {'.', '!', '?'}:
+      if i + 1 >= text.len or text[i + 1] == ' ':
+        let s = cur.strip()
+        if s.len > 0: result.add s
+        cur = ""
+        if i + 1 < text.len and text[i + 1] == ' ': inc i
+    inc i
+  let s = cur.strip()
+  if s.len > 0: result.add s
+
 proc synthesize*(model: KokoroModel, text: string,
                  voice: string = "af_heart", speed: float32 = 1.0,
                  callback: SynthCallback = nil): AudioOutput =
-  ## Full Kokoro TTS pipeline.
+  ## Full Kokoro TTS pipeline. Splits on sentence boundaries and calls
+  ## callback per chunk for streaming and barge-in support.
   let cfg = model.config
   if voice notin model.voices:
     raise newException(ValueError, "voice not found: " & voice)
@@ -1138,22 +1155,38 @@ proc synthesize*(model: KokoroModel, text: string,
   else:
     model.phmzr
 
-  let phonemes = phmzr.phonemize(normalizeForKokoro(text))
-  if phonemes.len == 0:
+  let sentences = splitSentencesSimple(normalizeForKokoro(text))
+  if sentences.len == 0:
     return AudioOutput(samples: @[], sampleRate: int32(cfg.samplingRate), channels: 1)
 
-  let audio = model.forward(phonemes, voiceTensor, speed)
-  eval(audio)
+  let sr = float32(cfg.samplingRate)
+  let sentenceSilence = int(0.35 * sr)  # 350ms between sentences
+  var allSamples: seq[float32]
+
+  for i, sentence in sentences:
+    let phonemes = phmzr.phonemize(sentence)
+    if phonemes.len == 0: continue
+
+    let audio = model.forward(phonemes, voiceTensor, speed)
+    eval(audio)
+
+    let chunkSamples = audio.toSeqF32()
+    if chunkSamples.len > 0:
+      if allSamples.len > 0:
+        allSamples.setLen(allSamples.len + sentenceSilence)
+      allSamples.add chunkSamples
+
+      if callback != nil:
+        let chunk = AudioOutput(
+          samples: chunkSamples,
+          sampleRate: int32(cfg.samplingRate),
+          channels: 1)
+        callback(chunk, i, sentences.len)
 
   result = AudioOutput(
+    samples: allSamples,
     sampleRate: int32(cfg.samplingRate),
-    channels: 1,
-  )
-  let n = audio.size
-  result.samples = audio.toSeqF32()
-
-  if callback != nil:
-    callback(result, 0, 1)
+    channels: 1)
 
 proc mixVoice*(model: var KokoroModel, name1, name2: string,
                weight: float32 = 0.5, mixName: string = ""): string =

@@ -6,8 +6,8 @@ import std/[tables, strutils, math, os, json, sequtils]
 import ../mlx/mlx
 
 const WHISPER_SAMPLE_RATE* = 16000
-const N_FFT = 400
-const HOP_LENGTH = 160
+const N_FFT* = 400
+const HOP_LENGTH* = 160
 const CHUNK_LENGTH = 30
 const N_SAMPLES = CHUNK_LENGTH * WHISPER_SAMPLE_RATE  # 480000
 const N_FRAMES* = N_SAMPLES div HOP_LENGTH             # 3000
@@ -140,9 +140,9 @@ proc buildMelFilters*(sampleRate: int, nFft: int, nMels: int): Tensor =
 
   fromSeq(fb, [nFreqs, nMels])
 
-proc logMelSpectrogram*(audio: Tensor, model: WhisperModel): Tensor =
-  ## Compute log-mel spectrogram from 16kHz PCM audio.
-  ## Input: (N_SAMPLES,) float32. Output: (n_frames, n_mels).
+proc logMelSpectrogramWith*(audio: Tensor, melFilters: Tensor): Tensor =
+  ## Compute log-mel spectrogram from 16kHz PCM audio with given mel filterbank.
+  ## Input: (N,) float32. Output: (n_frames, n_mels).
   let window = hanning(N_FFT)
 
   # Zero-pad for centered STFT (good enough for Whisper)
@@ -174,7 +174,7 @@ proc logMelSpectrogram*(audio: Tensor, model: WhisperModel): Tensor =
   let mags = magnitudes.slice([0, 0], [numFrames - 1, magnitudes.dim(1)])
 
   # Apply mel filterbank: (numFrames-1, N_FFT/2+1) @ (N_FFT/2+1, n_mels) → (numFrames-1, n_mels)
-  let melSpec = mags @ model.melFilters
+  let melSpec = mags @ melFilters
 
   # Log scale with dynamic range compression
   let logSpec = log10(maximum(melSpec, scalar(1e-10'f32)))
@@ -183,6 +183,10 @@ proc logMelSpectrogram*(audio: Tensor, model: WhisperModel): Tensor =
   let globalMax = maxVal(logMax, axis = 0, keepdims = true)
   let clamped = maximum(logSpec, globalMax - scalar(8.0'f32))
   (clamped + scalar(4.0'f32)) / scalar(4.0'f32)
+
+proc logMelSpectrogram*(audio: Tensor, model: WhisperModel): Tensor =
+  ## Compute log-mel spectrogram using the model's prebuilt mel filterbank.
+  logMelSpectrogramWith(audio, model.melFilters)
 
 # ── Sinusoidal positional embeddings ─────────────────────────────
 

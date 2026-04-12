@@ -40,7 +40,7 @@ proc s(): MlxStream {.inline.} = defaultStream.s
 
 # ── Tensor lifecycle ─────────────────────────────────────────────
 
-proc `=destroy`(t: Tensor) =
+proc `=destroy`(t: var Tensor) =
   if t.arr.ctx != nil:
     discard mlx_array_free(t.arr)
 
@@ -362,6 +362,18 @@ proc conv1d*(input, weight: Tensor, stride: int = 1, padding: int = 0,
   var res = mlx_array_new()
   discard mlx_conv1d(addr res, input.arr, weight.arr,
                       stride.cint, padding.cint, dilation.cint, groups.cint, s())
+  wrap(res)
+
+proc conv2d*(input, weight: Tensor, stride: array[2, int] = [1, 1],
+             padding: array[2, int] = [0, 0], dilation: array[2, int] = [1, 1],
+             groups: int = 1): Tensor =
+  ## 2D convolution. Input: (N, H, W, C_in), Weight: (C_out, kH, kW, C_in/groups).
+  var res = mlx_array_new()
+  discard mlx_conv2d(addr res, input.arr, weight.arr,
+                      stride[0].cint, stride[1].cint,
+                      padding[0].cint, padding[1].cint,
+                      dilation[0].cint, dilation[1].cint,
+                      groups.cint, s())
   wrap(res)
 
 proc convTranspose1d*(input, weight: Tensor, stride: int = 1, padding: int = 0,

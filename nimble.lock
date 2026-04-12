@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "packages": {
+    "docopt": {
+      "version": "0.8.0",
+      "vcsRevision": "fc4c72b2d60d8c6fadedb8d72f6b4ed288d86aa8",
+      "url": "https://github.com/JK8769/docopt.nim",
+      "downloadMethod": "git",
+      "dependencies": [],
+      "checksums": {
+        "sha1": "6a1ad3ac65c72c751471a8c53b0f6d188a72f35f"
+      }
+    },
+    "nim": {
+      "version": "2.2.8",
+      "vcsRevision": "4f500679b196fad944caa50a753f5bbfaefda001",
+      "url": "https://github.com/nim-lang/Nim.git",
+      "downloadMethod": "git",
+      "dependencies": [],
+      "checksums": {
+        "sha1": "0a03571ebc8156f145d81551ad4f94729ca80fff"
+      }
+    },
+    "zippy": {
+      "version": "0.10.11",
+      "vcsRevision": "9560f3d20479fb390c97f731ef8d100f1ed54e6c",
+      "url": "https://github.com/guzba/zippy",
+      "downloadMethod": "git",
+      "dependencies": [],
+      "checksums": {
+        "sha1": "12e761e18ccc0a1b0e931c74dd02bb4b74544d56"
+      }
+    }
+  },
+  "tasks": {}
+}

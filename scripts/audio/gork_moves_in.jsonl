@@ -1,0 +1,137 @@
+{"type":"header","title":"Gork Moves In","format":"show","created":"2026-04-12T05:15:28","cast":{"Mia":"af_heart","Jade":"af_sky","Luna":"af_bella","Nadia":"af_nova","Gork":"am_adam"},"defaults":{"pause":0.4,"speed":1,"narrator_voice":"af_nicole"}}
+{"type":"chapter","text":"Act 1: Welcome to the House"}
+{"type":"scene","text":"Living room, Saturday afternoon. The girls are gathered on the couch with wine glasses ready. The doorbell rings and Mia jumps up.","setting":"living room","characters":["Mia","Jade","Luna","Nadia"],"mood":"excited","narrate":true}
+{"type":"line","name":"Mia","text":"Oh my god, he's here! Okay everyone, be cool, be normal. Hi! You must be Gork! Welcome to the house! I'm Mia, I'm the one who posted the listing. Come in, come in! Don't mind the mess, that's Luna's fault.","pause":0.5}
+{"type":"scene","text":"Gork steps inside with a duffel bag, taking in the place.","setting":"front door","characters":["Gork","Mia"],"mood":"casual"}
+{"type":"line","name":"Gork","text":"Yo, Mia, what's good? This place looks chill. Luna's mess ain't scaring me off.","pause":0.4}
+{"type":"scene","text":"Jade doesn't get up, just raises her wine glass from the couch.","setting":"living room","characters":["Jade","Gork"],"mood":"cool"}
+{"type":"line","name":"Jade","text":"I'm Jade. Welcome to the estrogen zone, Gork. Fair warning, the bathroom schedule is non-negotiable. And if you eat my yogurt from the fridge, I will end you. Other than that, we're lovely.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, Jade noted, yogurt is sacred. Bathroom schedule locked in. I'm not trying to get ended on day one.","pause":0.4}
+{"type":"scene","text":"Luna bounces over with a big smile and paint-stained fingers.","setting":"living room","characters":["Luna","Gork"],"mood":"warm"}
+{"type":"line","name":"Luna","text":"Hi Gork! I'm Luna! I'm an artist, so sorry in advance if you find paint on random surfaces. Also I should warn you, I walk around in just a t-shirt sometimes because I forget people exist. So, you know, don't be weird about it.","pause":0.5}
+{"type":"line","name":"Gork","text":"Don't be weird. I'm literally the definition of not weird. You good?","pause":0.4}
+{"type":"scene","text":"Nadia walks in from the garage, arms crossed, sizing Gork up.","setting":"living room","characters":["Nadia","Gork"],"mood":"intimidating"}
+{"type":"line","name":"Nadia","text":"So you're the new guy. I'm Nadia. I work out at five AM so don't even think about being loud at night. Also, do you lift? Because you look like you might lift. Maybe.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, nah. Maybe we can spot each other sometime. You trying to be my gym bro?","pause":0.6}
+{"type":"scene","text":"Mia pours wine for everyone, handing Gork a glass.","setting":"living room","characters":["Mia","Gork","Jade","Luna","Nadia"],"mood":"relaxed"}
+{"type":"line","name":"Mia","text":"Gym bro? Nadia doesn't do bros. Last guy who tried to spot her, she out-lifted him and he never came back. But honestly Gork, you seem cool. Want a drink? We were just about to open some wine.","pause":0.5}
+{"type":"line","name":"Gork","text":"I am cool. Thanks for noticing. This house already feels like home.","pause":0.4}
+{"type":"line","name":"Jade","text":"Home? It's been five minutes. Don't get too comfortable yet. Wait until you hear Luna singing in the shower at midnight, or Mia FaceTiming her ex while crying into ice cream. Then tell me it feels like home.","pause":0.5}
+{"type":"line","name":"Gork","text":"Midnight shower concerts and ice cream sob sessions. Sounds like peak entertainment. I'm staying.","pause":0.4}
+{"type":"line","name":"Luna","text":"Jade! Don't expose me on day one! My singing is beautiful, thank you very much. And Gork, just so you know, the walls in this house are really thin. Like, really thin. So, you know, just keep that in mind for... everything.","pause":0.5}
+{"type":"line","name":"Gork","text":"I'm sure your singing's beautiful, Luna. Keep performing at midnight. I'm here for the show.","pause":0.4}
+{"type":"line","name":"Nadia","text":"Thin walls? Luna, why are you giving him the thin walls speech already? He just walked in the door. Let the man at least unpack before you start flirting.","pause":0.5}
+{"type":"line","name":"Gork","text":"Y'all gossiping about me already? Savage.","pause":0.6}
+{"type":"chapter","text":"Act 2: Getting to Know Gork"}
+{"type":"scene","text":"Everyone settles into the couch. Mia tops off the glasses and turns to Gork with a mischievous grin.","setting":"living room couch","characters":["Mia","Gork","Jade","Luna","Nadia"],"mood":"curious","narrate":true}
+{"type":"line","name":"Mia","text":"Oh we're absolutely going to gossip about you. That's what happens when you move in with four women. Here's your wine. So Gork, tell us everything. Are you single? What do you do? And most importantly, are you a clean person? Because if you leave the toilet seat up, Jade will literally murder you.","pause":0.5}
+{"type":"line","name":"Gork","text":"Single. I work remote, and yeah, I'm clean. Toilet seat stays down. I don't got a death wish.","pause":0.4}
+{"type":"line","name":"Jade","text":"Single and house trained? Okay, maybe this won't be a disaster after all. Works remote too, so he'll be home all day. Luna, try to wear pants.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, Luna. Pants optional. Don't change for me. I'm adaptable AF.","pause":0.4}
+{"type":"line","name":"Luna","text":"See! He gets it! I told you guys a male housemate would be chill. Also Gork, your room is right next to mine, so if you ever need anything at night, just knock. I'm always up late painting anyway.","pause":0.5}
+{"type":"line","name":"Gork","text":"Late night painting session. I might just knock for the vibes then.","pause":0.4}
+{"type":"scene","text":"Nadia raises an eyebrow, cutting through the flirting.","setting":"living room","characters":["Nadia"],"mood":"serious"}
+{"type":"line","name":"Nadia","text":"Luna is literally throwing herself at you and you've been here ten minutes. Impressive. Anyway Gork, real talk, house rule number one. Nobody hooks up with a housemate. It makes everything weird. Mia made the rule after the last guy.","pause":0.5}
+{"type":"line","name":"Gork","text":"Rule number one is: Don't steal Jade's yogurt. I got it memorized already.","pause":0.4}
+{"type":"line","name":"Mia","text":"Oh my god, we do not talk about the last guy! That was a whole situation. Let's just say boundaries got crossed, feelings got messy, and someone may or may not have cried in the kitchen for three days. Moving on! Gork, what are you into? Hobbies, interests, anything?","pause":0.5}
+{"type":"line","name":"Gork","text":"I lift, game, and cook. Pretty basic, but it keeps me out of trouble. Mostly.","pause":0.4}
+{"type":"scene","text":"Nadia perks up, suddenly interested.","setting":"living room","characters":["Nadia"],"mood":"impressed"}
+{"type":"line","name":"Nadia","text":"Wait, you actually lift and cook? Okay, you just went up like five points. What's your split? And please don't say you skip leg day because I will lose all respect for you immediately.","pause":0.5}
+{"type":"line","name":"Gork","text":"Legs are my strongest day. Actually, I don't skip. Squats are religion.","pause":0.4}
+{"type":"line","name":"Nadia","text":"Squats are religion. Okay, I respect that. We're going to the gym together Monday. No excuses. Five AM sharp. I'll see what you're actually made of.","pause":0.5}
+{"type":"line","name":"Gork","text":"Five AM is insane, but I'm there. Set the alarm. Don't leave me behind.","pause":0.4}
+{"type":"line","name":"Jade","text":"Oh great, now Nadia has a gym boyfriend. Meanwhile Luna's already planning midnight art sessions next door. Mia, how long until this house turns into a reality show? I give it two weeks.","pause":0.5}
+{"type":"line","name":"Gork","text":"Luna is already planning her next move. I see the glint in her eye.","pause":0.6}
+{"type":"chapter","text":"Act 3: Ground Rules"}
+{"type":"scene","text":"Luna throws a pillow at Gork. The wine is flowing and everyone's getting comfortable.","setting":"living room","characters":["Luna","Gork","Mia","Jade","Nadia"],"mood":"playful","narrate":true}
+{"type":"line","name":"Luna","text":"I am not planning anything! I was just being friendly! God, you guys make everything weird. Also Gork, you said you cook? Because nobody in this house can cook. Mia burns water and Jade thinks cheese and crackers is a meal.","pause":0.5}
+{"type":"line","name":"Gork","text":"We make everything weird, y'all\u2014the ones turning a simple welcome into chaos. I'm just along for the ride.","pause":0.4}
+{"type":"line","name":"Mia","text":"Okay first of all, I do not burn water. That was one time. And second, Gork, if you actually cook for us, you will become the most popular person in this house overnight. Like, we will literally worship you.","pause":0.5}
+{"type":"line","name":"Gork","text":"Bet I'll cook tomorrow night. Prepare to worship.","pause":0.4}
+{"type":"scene","text":"Jade raises her glass toward Gork.","setting":"living room","characters":["Jade","Gork"],"mood":"grudging respect"}
+{"type":"line","name":"Jade","text":"Worship is a strong word. But if you can make a decent pasta, I'll upgrade you from tolerable to acceptable. That's high praise coming from me. Cheers to the new guy. Try not to make it weird, Gork.","pause":0.5}
+{"type":"line","name":"Gork","text":"High praise accepted. I'll deliver. You won't regret letting me cook.","pause":0.4}
+{"type":"line","name":"Nadia","text":"Okay so real talk, since we're all getting comfortable. Gork, ground rules for living with women. If you see tampons under the sink, don't freak out. If someone's crying for no reason, just offer chocolate and back away slowly. And if you hear weird noises from anyone's room at night, mind your own business.","pause":0.5}
+{"type":"line","name":"Gork","text":"If someone's crying for no reason, I just hand them ice cream and stay quiet. Learned that one the hard way.","pause":0.4}
+{"type":"scene","text":"Mia clutches her chest, impressed.","setting":"living room","characters":["Mia"],"mood":"surprised"}
+{"type":"line","name":"Mia","text":"He already knows about the ice cream thing? Okay, this man has been trained. Who was she? Ex-girlfriend? Sister? Give us the lore, Gork.","pause":0.5}
+{"type":"line","name":"Gork","text":"Ex who cried a lot taught me ice cream is the universal fix. I'm a pro now.","pause":0.4}
+{"type":"scene","text":"Luna leans in, wine glass in hand, eyes wide.","setting":"living room","characters":["Luna"],"mood":"nosy"}
+{"type":"line","name":"Luna","text":"Aww, that's actually sweet. What happened with her? Sorry, I'm nosy. It's a character flaw. Also a Pisces thing. Also I've had two glasses of wine so my filter is completely gone.","pause":0.5}
+{"type":"line","name":"Gork","text":"Nosy's fine. I got nothing to hide. Ask away.","pause":0.4}
+{"type":"line","name":"Jade","text":"Oh no. You gave Luna permission. That's like opening Pandora's box. She's going to ask you your love language, your attachment style, and whether you're a big spoon or little spoon within the next five minutes. I'm timing it.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, bring it on, Luna! I'm ready for the interrogation. Hit me with the questions.","pause":0.4}
+{"type":"chapter","text":"Act 4: The Vibe Check"}
+{"type":"scene","text":"Luna sits up straight, eyes gleaming. Jade checks her watch with a smirk.","setting":"living room","characters":["Luna","Jade","Gork"],"mood":"anticipation","narrate":true}
+{"type":"line","name":"Luna","text":"Okay okay okay! Big spoon or little spoon? And don't lie. There's no wrong answer. Actually wait, little spoon is the right answer because it means you're secure in your masculinity.","pause":0.5}
+{"type":"line","name":"Gork","text":"Little spoon, if the vibe is right, but don't tell anyone I said that.","pause":0.5}
+{"type":"scene","text":"The whole room erupts. Luna claps her hands.","setting":"living room","characters":["Luna","Mia","Jade","Nadia","Gork"],"mood":"ecstatic"}
+{"type":"line","name":"Luna","text":"I knew it! Secure masculinity! Jade, are you timing? That was under two minutes. Gork, you just passed the vibe check with flying colors. Honestly I might cry.","pause":0.5}
+{"type":"line","name":"Gork","text":"Vibe check passed, crisis averted, no tears needed. I'm just built different.","pause":0.4}
+{"type":"scene","text":"Nadia shakes her head, amused despite herself.","setting":"living room","characters":["Nadia"],"mood":"amused"}
+{"type":"line","name":"Nadia","text":"Built different, he says. Bro, you just admitted to being little spoon in a room full of women you met twenty minutes ago. That's either the most confident thing I've ever seen or the dumbest. I can't decide which and I kind of respect it either way.","pause":0.5}
+{"type":"line","name":"Gork","text":"It's confidence. Trust me, dumb would be lying about it.","pause":0.6}
+{"type":"chapter","text":"Act 5: Red Flags and Never Have I Ever"}
+{"type":"scene","text":"Mia refills everyone's glass. The energy in the room has shifted from cautious to chaotic.","setting":"living room","characters":["Mia","Gork","Jade","Luna","Nadia"],"mood":"chaotic","narrate":true}
+{"type":"line","name":"Mia","text":"Okay I love this energy. We're keeping him. So Gork, since we're being honest tonight, what's your biggest red flag? Everyone has one. Mine is that I stalk my ex's Instagram like it's my job. Jade's is that she judges everyone silently. Your turn.","pause":0.5}
+{"type":"line","name":"Gork","text":"I ghost people when I get too comfortable. That's my shit. I know it's bad.","pause":0.4}
+{"type":"scene","text":"Jade points her wine glass at Gork like a weapon.","setting":"living room","characters":["Jade","Gork"],"mood":"diagnostic"}
+{"type":"line","name":"Jade","text":"Oh, a ghoster. Classic avoidant attachment. Luna is going to try to fix you, I guarantee it. She collects emotionally unavailable men like Pokemon cards.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, Luna, trying to collect me. I got that avoidant aura. Good luck with that mission.","pause":0.4}
+{"type":"scene","text":"Luna hugs a cushion defensively.","setting":"living room","characters":["Luna"],"mood":"defensive"}
+{"type":"line","name":"Luna","text":"I do not collect them! They just find me! It's not my fault I'm attracted to men who need emotional therapy. Also Gork, ghosting is fixable. You just need someone who won't let you disappear. Like a really persistent person. Who lives right next door to you. Hypothetically.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, Luna, you being real obvious right now, but I'm listening. Persistent neighbor sounds dangerous though.","pause":0.4}
+{"type":"scene","text":"Nadia nearly spits out her drink.","setting":"living room","characters":["Nadia"],"mood":"disbelief"}
+{"type":"line","name":"Nadia","text":"Hypothetically? Girl, you basically just proposed. It's been half an hour! Mia, your no hookup rule is going to last about three days, max. I'm calling it now.","pause":0.5}
+{"type":"line","name":"Gork","text":"Half an hour and we're already at proposal stage. This house moves fast as hell.","pause":0.4}
+{"type":"scene","text":"Mia throws her hands up.","setting":"living room","characters":["Mia"],"mood":"exasperated"}
+{"type":"line","name":"Mia","text":"The rule exists for a reason, people! But honestly, watching Luna crash and burn in real time is entertainment I did not budget for tonight. Gork, I'm sorry about her. She's harmless, she's just desperate. I mean, passionate. I mean... yeah, desperate.","pause":0.5}
+{"type":"line","name":"Gork","text":"This is best. No worries, Luna's entertaining. This is the best welcome I've ever had.","pause":0.4}
+{"type":"scene","text":"Luna buries her face in the cushion then peeks out.","setting":"living room","characters":["Luna"],"mood":"mortified"}
+{"type":"line","name":"Luna","text":"I hate all of you. Except Gork. Gork is nice. Gork doesn't bully me. Also I am not desperate, I am romantically optimistic. There's a difference. Now can we please change the subject before I die of embarrassment? Who wants more wine?","pause":0.5}
+{"type":"line","name":"Gork","text":"More wine sounds good, and hey, Luna, you're good. No embarrassment needed. We're all a little messy.","pause":0.6}
+{"type":"scene","text":"Jade leans back, third glass deep, with an evaluating look.","setting":"living room","characters":["Jade"],"mood":"scheming","narrate":true}
+{"type":"line","name":"Jade","text":"We're all a little messy, he says. Smooth. You know what, Gork, I was skeptical about a guy moving in. But you handle four drunk women roasting you without breaking a sweat. That takes skill. Or insanity. Either way, I'll allow it. Now, who wants to play never have I ever? I feel like we should learn the real dirt on our new housemate.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, I'm down for never have I ever, but y'all better not expose me too hard.","pause":0.4}
+{"type":"scene","text":"Mia claps excitedly.","setting":"living room","characters":["Mia"],"mood":"gleeful"}
+{"type":"line","name":"Mia","text":"Yes! Okay I'll start. Never have I ever hooked up with a roommate. And everyone better be honest because Nadia can smell lies.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, I haven't. But now I feel like that's about to change with the energy in this room.","pause":0.5}
+{"type":"scene","text":"Everyone screams. Nadia points at Luna.","setting":"living room","characters":["Nadia","Luna","Mia","Jade","Gork"],"mood":"explosive"}
+{"type":"line","name":"Nadia","text":"Did he just say that? Day one! Day one and he's already saying stuff like that! Mia, your rule is dead. It's buried. Rest in peace. Also, Luna, close your mouth, you're literally drooling.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, Mia's rule is cooked. Luna, you good over there? Eyes up here.","pause":0.4}
+{"type":"scene","text":"Luna fans herself.","setting":"living room","characters":["Luna"],"mood":"flustered"}
+{"type":"line","name":"Luna","text":"I was not drooling! I was just... surprised! Anyway, my turn. Never have I ever sent a spicy text to the wrong person. And Mia, don't even look at me like that because I know you have.","pause":0.5}
+{"type":"line","name":"Gork","text":"Mia, you got that look. Spill your story right now\u2014we're all sharing.","pause":0.4}
+{"type":"scene","text":"Mia goes bright red.","setting":"living room","characters":["Mia"],"mood":"mortified"}
+{"type":"line","name":"Mia","text":"Okay fine! One time I sent a really, really dirty text meant for this guy I was seeing. And it went to my dad. My actual father. I wanted to die. He just replied wrong number I hope and we have never spoken about it since. Worst moment of my entire life.","pause":0.6}
+{"type":"line","name":"Gork","text":"Yo, your dad replying wrong number I hope is actually elite. That's top tier dad response.","pause":0.5}
+{"type":"chapter","text":"Act 6: The Dirt Comes Out"}
+{"type":"scene","text":"Jade is crying laughing, barely holding her wine steady.","setting":"living room","characters":["Jade","Mia","Gork","Luna","Nadia"],"mood":"hysterical","narrate":true}
+{"type":"line","name":"Jade","text":"I remember that day. She came home white as a ghost and drank an entire bottle of wine by herself. Wouldn't tell us why for a week. Best day of my life when she finally confessed. Okay, my turn. Never have I ever been caught doing something I shouldn't by a housemate. And yes, I'm asking this specifically because Gork needs to know what he's getting into.","pause":0.5}
+{"type":"line","name":"Gork","text":"Finally spilled. Yeah, that must have been hilarious to watch unfold.","pause":0.4}
+{"type":"scene","text":"Nadia raises her hand slowly, looking at Luna.","setting":"living room","characters":["Nadia","Luna"],"mood":"confessional"}
+{"type":"line","name":"Nadia","text":"Okay, I'll go. Luna walked in on me with this guy from the gym once. I thought everyone was out. They were not out. She just stood there like a deer in headlights for a solid ten seconds before screaming and running away. We didn't make eye contact for a week.","pause":0.6}
+{"type":"line","name":"Gork","text":"Yo, Luna walking in on that must have been scarring for both of you. No wonder you avoided eye contact.","pause":0.4}
+{"type":"scene","text":"Luna covers her face with both hands.","setting":"living room","characters":["Luna"],"mood":"traumatized"}
+{"type":"line","name":"Luna","text":"It was traumatic! I thought she was doing yoga! That was not yoga! The sounds alone still haunt me. So Gork, lesson learned, always lock the door in this house. Always. I cannot stress this enough.","pause":0.5}
+{"type":"line","name":"Gork","text":"Noted. Lock the door. Always. Got it.","pause":0.4}
+{"type":"line","name":"Jade","text":"Oh I wasn't involved in that incident. I was in my room, heard the scream, and just put my headphones on. I've learned to never investigate strange noises in this house. That's survival rule number one. But Gork, since you're the only guy here now, I should warn you. Movie night is every Sunday and Mia always picks the ones with the shirtless guys. It's not subtle.","pause":0.5}
+{"type":"line","name":"Gork","text":"Headphones and ignorance is the only way to survive, y'all noted.","pause":0.4}
+{"type":"line","name":"Mia","text":"I pick good movies! It's not my fault that good movies happen to have attractive men in them! It's called cinematography! Anyway Gork, you're joining movie night. No choice. And if you fall asleep during the movie like Nadia always does, you get your face drawn on. Luna keeps markers ready.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, movie night with attractive men and marker threats. I'm in, but I don't snore, so I'm safe.","pause":0.4}
+{"type":"scene","text":"Nadia stretches, still salty about the incident.","setting":"living room","characters":["Nadia"],"mood":"salty"}
+{"type":"line","name":"Nadia","text":"I fell asleep one time. One time! And Luna drew a mustache and abs on my face. I went to the gym the next morning without checking the mirror. The front desk guy didn't say a word. Just let me walk in looking like a cartoon villain. I'm still not over it.","pause":0.5}
+{"type":"line","name":"Gork","text":"Abs. Yo, you went to the gym with abs drawn on your face. Absolute legend behavior.","pause":0.4}
+{"type":"scene","text":"Luna giggles proudly.","setting":"living room","characters":["Luna"],"mood":"proud"}
+{"type":"line","name":"Luna","text":"The abs were my best work! I used shading and everything! It was art, Nadia. You should've been honored. Anyway Gork, I promise I won't draw on you. Unless you're really cute when you sleep. Then no promises.","pause":0.5}
+{"type":"line","name":"Gork","text":"Yo, if I'm cute when I sleep, you can draw whatever, but no abs. I already got those.","pause":0.5}
+{"type":"chapter","text":"Act 7: Proof"}
+{"type":"scene","text":"The room goes quiet for a second. Then chaos.","setting":"living room","characters":["Jade","Nadia","Mia","Luna","Gork"],"mood":"electric","narrate":true}
+{"type":"line","name":"Jade","text":"Already got those. Wow. Bold claim. Nadia, as the fitness expert of this house, are we going to need proof? Because I feel like we need proof.","pause":0.5}
+{"type":"line","name":"Gork","text":"Proof. I'll flex right now. Judge for yourself. Abs are legit.","pause":0.4}
+{"type":"scene","text":"Mia grabs her wine like popcorn.","setting":"living room","characters":["Mia"],"mood":"thrilled"}
+{"type":"line","name":"Mia","text":"Oh my god, is he about to lift his shirt? On day one? In our living room? I'm not complaining, I'm just saying this is exactly how the last situation started and look where that got us. But also, yes, please continue.","pause":0.5}
+{"type":"scene","text":"Nadia steps up, arms crossed, putting on her best judge face.","setting":"living room","characters":["Nadia","Gork"],"mood":"judicial"}
+{"type":"line","name":"Nadia","text":"Alright, let me see. I'm the only one here qualified to judge this. Mia, stop giggling. Luna, stop staring. Jade, put your phone down, nobody is taking pictures on day one. Okay Gork, let's see what you got.","pause":0.5}
+{"type":"scene","text":"Luna's jaw drops.","setting":"living room","characters":["Luna"],"mood":"smitten"}
+{"type":"line","name":"Luna","text":"Wait, does Gork speak Chinese? That's so hot. I mean interesting. I mean... okay yeah, I meant hot. I'm done pretending.","pause":0.6}
