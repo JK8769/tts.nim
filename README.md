@@ -19,6 +19,11 @@ Native text-to-speech, speech-to-text, and video rendering engine for Nim. Uses 
 
 *Click to watch full video with audio.* A short script rendered with the `script` MCP tool — TTS audio + Remotion video with radio studio visuals, speaker panels, mood-reactive orb, and timed subtitles.
 
+**Voice gallery** — 5 voices selected by acoustic analysis (pitch, brightness, energy, texture):
+
+- [English voice demo](https://github.com/JK8769/tts.nim/releases/download/v0.2.0/voice_demo.mp4) — af_heart, am_onyx, bf_emma, bm_daniel, af_aoede
+- [Chinese voice demo](https://github.com/JK8769/tts.nim/releases/download/v0.2.0/voice_demo_zh.mp4) — zf_002, zm_098, zf_038, zm_029, zm_097
+
 ## Quick start
 
 ### Install
