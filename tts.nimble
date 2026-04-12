@@ -128,21 +128,25 @@ proc downloadQwen3Asr(variant: string) =
   mkDir modelsDir
   let repo = "JK8769/tts.nim"
   let tarball = modelsDir & "/" & dirName & ".tar.gz"
-  downloadFile(dirName, "https://github.com/" & repo &
-    "/releases/latest/download/" & dirName & ".tar.gz", tarball, required = false)
+  let url = "https://github.com/" & repo & "/releases/latest/download/" & dirName & ".tar.gz"
+  echo "Downloading " & dirName & "..."
+  # Use exec (not gorgeEx) for large downloads — gorgeEx times out on big files
+  try:
+    exec "curl -L --progress-bar --fail -o " & tarball & " " & url
+  except:
+    echo "  ⚠ GitHub release download failed, trying HuggingFace..."
+    if fileExists(tarball): rmFile tarball
   if fileExists(tarball):
     exec "tar -xzf " & tarball & " -C " & modelsDir
     rmFile tarball
     if dirExists(dest) and fileExists(dest & "/model.safetensors"):
-      echo dirName & " ✓ (from GitHub releases)"
       return
   # Fall back to HuggingFace (individual file downloads)
-  echo dirName & " — falling back to HuggingFace..."
+  echo dirName & " — downloading from HuggingFace..."
   mkDir dest
   let base = "https://huggingface.co/mlx-community/Qwen3-ASR-" & variant & "/resolve/main"
-  for f in @["config.json", "model.safetensors", "vocab.json",
-             "merges.txt", "tokenizer_config.json", "generation_config.json"]:
-    downloadFile(dirName & "/" & f, base & "/" & f, dest & "/" & f, required = false)
+  for f in @["config.json", "model.safetensors", "vocab.json"]:
+    exec "curl -L --progress-bar --fail -o " & dest & "/" & f & " " & base & "/" & f
 
 proc downloadWhisperMlx() =
   ## Download Whisper base.en model (safetensors) from HuggingFace.
