@@ -233,6 +233,19 @@ proc buildMlx() =
   exec "cp " & buildDir & "/_deps/mlx-build/mlx/backend/metal/kernels/mlx.metallib " &
        installDir & "/lib/"
 
+after install:
+  # Clean up old nimble package versions to prevent disk bloat.
+  # Each install copies ~4 GB (models, libs). Without cleanup, 8 installs = 35 GB.
+  let nimbleDir = getHomeDir() & ".nimble/pkgs2"
+  let thisHash = thisDir().split("tts-")[^1]  # current install's hash suffix
+  if dirExists(nimbleDir):
+    for kind, path in walkDir(nimbleDir):
+      if kind == pcDir:
+        let name = path.splitPath().tail
+        if name.startsWith("tts-") and not path.endsWith(thisHash):
+          echo "Removing old tts install: ", name
+          rmDir path
+
 before install:
   ensureSubmodules()
   buildEspeakNg()

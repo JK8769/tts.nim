@@ -19,7 +19,7 @@
  *         replays full state on connect so late-joining clients catch up
  */
 
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, unlinkSync } from "fs";
 import { resolve, dirname, join } from "path";
 
 const root = dirname(new URL(import.meta.url).pathname);
@@ -107,14 +107,19 @@ const server = Bun.serve({
       });
     }
 
-    // Audio files — with Range request support for Remotion seeking
-    if (url.pathname.startsWith("/audio/")) {
-      const name = url.pathname.slice(7); // strip /audio/
-      const filePath = join(audioDir, name);
+    // Serve audio files from the audio-dir or absolute paths.
+    //   /audio/<name>         — from audioDir (speech WAVs, downloaded music)
+    //   /file/<absolute-path> — serve a local file directly (no copy needed)
+    // Speech WAVs (line_*.wav) are auto-deleted after serving to save disk.
+    if (url.pathname.startsWith("/audio/") || url.pathname.startsWith("/file/")) {
+      const isAbsolute = url.pathname.startsWith("/file/");
+      const filePath = isAbsolute
+        ? decodeURIComponent(url.pathname.slice(6)) // strip /file/
+        : join(audioDir, url.pathname.slice(7));     // strip /audio/
       if (existsSync(filePath)) {
         const file = Bun.file(filePath);
         const size = file.size;
-        const mime = audioMime(name);
+        const mime = audioMime(filePath);
         const rangeHeader = req.headers.get("range");
 
         if (rangeHeader) {
@@ -134,6 +139,12 @@ const server = Bun.serve({
               },
             });
           }
+        }
+
+        // Auto-delete speech WAVs after serving (they're only played once)
+        const isSpeechWav = !isAbsolute && /^line_\d+\.wav$/.test(url.pathname.slice(7));
+        if (isSpeechWav) {
+          setTimeout(() => { try { unlinkSync(filePath); } catch {} }, 5000);
         }
 
         return new Response(file, {

@@ -736,6 +736,37 @@ when isMainModule:
       finally:
         client.close()
 
+    proc resolveMediaFile(filePath, urlPath: string): tuple[url: string, err: string] =
+      ## Resolve a local file or URL to a serveable URL.
+      ## Local files: served directly via /file/ endpoint (zero copy).
+      ## URL downloads: cached in streamAudioDir with hash-based names (no duplicates).
+      if urlPath.len > 0:
+        let ext = if urlPath.contains(".mp3"): ".mp3"
+                  elif urlPath.contains(".ogg"): ".ogg"
+                  elif urlPath.contains(".wav"): ".wav"
+                  else: ".mp3"
+        # Hash-based filename: same URL = same file, no duplicates
+        var h = 0u32
+        for c in urlPath: h = h * 31 + c.uint32
+        let mediaFile = "dl_" & $h & ext
+        let dest = streamAudioDir / mediaFile
+        if not fileExists(dest):
+          let client = newHttpClient(timeout = 30000)
+          try:
+            client.downloadFile(urlPath, dest)
+          except:
+            return ("", "Failed to download: " & urlPath)
+          finally:
+            client.close()
+        return ("/audio/" & mediaFile, "")
+      elif filePath.len > 0:
+        if not fileExists(filePath):
+          return ("", "file not found: " & filePath)
+        # Serve directly from original location — no copy
+        return ("/file/" & filePath, "")
+      else:
+        return ("", "file or url is required")
+
     const calibrationPath = pkgRoot / "res" / "calibration.json"
 
     proc saveCalibration() =
@@ -2462,80 +2493,29 @@ when isMainModule:
                   mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
                     "action": "curve", "curve": curveVal})}]}))
               elif action == "load":
-                # Cue a track on the inactive deck — fetch+decode, silent, ready to crossfade
-                let filePath = toolArgs.getOrDefault("file").getStr("")
-                let urlPath = toolArgs.getOrDefault("url").getStr("")
-                var musicFile = ""
-                var musicErr = ""
-                block resolveLoad:
-                  if urlPath.len > 0:
-                    let ext = if urlPath.contains(".mp3"): ".mp3"
-                              elif urlPath.contains(".ogg"): ".ogg"
-                              elif urlPath.contains(".wav"): ".wav"
-                              else: ".mp3"
-                    musicFile = "music_" & $streamLineIndex & ext
-                    let dest = streamAudioDir / musicFile
-                    let client = newHttpClient(timeout = 30000)
-                    try:
-                      client.downloadFile(urlPath, dest)
-                    except:
-                      musicErr = "Failed to download: " & urlPath
-                    finally:
-                      client.close()
-                  elif filePath.len > 0:
-                    if not fileExists(filePath):
-                      musicErr = "file not found: " & filePath
-                    else:
-                      let ext2 = splitFile(filePath).ext
-                      musicFile = "music_" & $streamLineIndex & ext2
-                      copyFile(filePath, streamAudioDir / musicFile)
-                  else:
-                    musicErr = "file or url is required for load action"
-                if musicErr.len > 0:
-                  mcpSend(mcpError(id, -32000, musicErr))
+                let (mediaUrl, mediaErr) = resolveMediaFile(
+                  toolArgs.getOrDefault("file").getStr(""),
+                  toolArgs.getOrDefault("url").getStr(""))
+                if mediaErr.len > 0:
+                  mcpSend(mcpError(id, -32000, mediaErr))
                 else:
                   let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
                   let loop = toolArgs.getOrDefault("loop").getBool(true)
                   let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
                   discard streamPost("music", %*{
                     "action": "load",
-                    "url": "/audio/" & musicFile,
+                    "url": mediaUrl,
                     "volume": volume,
                     "loop": loop,
                     "start_at": startAt})
                   mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
-                    "loaded": true, "file": musicFile, "deck": "inactive"})}]}))
+                    "loaded": true, "url": mediaUrl, "deck": "inactive"})}]}))
               elif action == "play":
-                let filePath = toolArgs.getOrDefault("file").getStr("")
-                let urlPath = toolArgs.getOrDefault("url").getStr("")
-                var musicFile = ""
-                var musicErr = ""
-                block resolveMusic:
-                  if urlPath.len > 0:
-                    let ext = if urlPath.contains(".mp3"): ".mp3"
-                              elif urlPath.contains(".ogg"): ".ogg"
-                              elif urlPath.contains(".wav"): ".wav"
-                              else: ".mp3"
-                    musicFile = "music_" & $streamLineIndex & ext
-                    let dest = streamAudioDir / musicFile
-                    let client = newHttpClient(timeout = 30000)
-                    try:
-                      client.downloadFile(urlPath, dest)
-                    except:
-                      musicErr = "Failed to download: " & urlPath
-                    finally:
-                      client.close()
-                  elif filePath.len > 0:
-                    if not fileExists(filePath):
-                      musicErr = "file not found: " & filePath
-                    else:
-                      let ext2 = splitFile(filePath).ext
-                      musicFile = "music_" & $streamLineIndex & ext2
-                      copyFile(filePath, streamAudioDir / musicFile)
-                  else:
-                    musicErr = "file or url is required for play action"
-                if musicErr.len > 0:
-                  mcpSend(mcpError(id, -32000, musicErr))
+                let (mediaUrl, mediaErr) = resolveMediaFile(
+                  toolArgs.getOrDefault("file").getStr(""),
+                  toolArgs.getOrDefault("url").getStr(""))
+                if mediaErr.len > 0:
+                  mcpSend(mcpError(id, -32000, mediaErr))
                 else:
                   let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
                   let loop = toolArgs.getOrDefault("loop").getBool(true)
@@ -2543,54 +2523,28 @@ when isMainModule:
                   let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
                   discard streamPost("music", addCurve(%*{
                     "action": "play",
-                    "url": "/audio/" & musicFile,
+                    "url": mediaUrl,
                     "volume": volume,
                     "loop": loop,
                     "fade_ms": fadeMs,
                     "start_at": startAt}))
                   mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
-                    "playing": true, "file": musicFile, "volume": volume, "loop": loop})}]}))
+                    "playing": true, "url": mediaUrl, "volume": volume, "loop": loop})}]}))
               elif action == "crossfade":
-                # Crossfade to pre-loaded inactive deck, or load+crossfade if file given
                 let filePath = toolArgs.getOrDefault("file").getStr("")
                 let urlPath = toolArgs.getOrDefault("url").getStr("")
                 let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(2000)
                 let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
                 if filePath.len > 0 or urlPath.len > 0:
-                  # Load first, then crossfade (convenience shortcut)
-                  var musicFile = ""
-                  var musicErr = ""
-                  block resolveCrossfade:
-                    if urlPath.len > 0:
-                      let ext = if urlPath.contains(".mp3"): ".mp3"
-                                elif urlPath.contains(".ogg"): ".ogg"
-                                elif urlPath.contains(".wav"): ".wav"
-                                else: ".mp3"
-                      musicFile = "music_" & $streamLineIndex & ext
-                      let dest = streamAudioDir / musicFile
-                      let client = newHttpClient(timeout = 30000)
-                      try:
-                        client.downloadFile(urlPath, dest)
-                      except:
-                        musicErr = "Failed to download: " & urlPath
-                      finally:
-                        client.close()
-                    elif filePath.len > 0:
-                      if not fileExists(filePath):
-                        musicErr = "file not found: " & filePath
-                      else:
-                        let ext2 = splitFile(filePath).ext
-                        musicFile = "music_" & $streamLineIndex & ext2
-                        copyFile(filePath, streamAudioDir / musicFile)
-                  if musicErr.len > 0:
-                    mcpSend(mcpError(id, -32000, musicErr))
+                  let (mediaUrl, mediaErr) = resolveMediaFile(filePath, urlPath)
+                  if mediaErr.len > 0:
+                    mcpSend(mcpError(id, -32000, mediaErr))
                   else:
                     let loop = toolArgs.getOrDefault("loop").getBool(true)
                     let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
-                    # Load on inactive deck then crossfade
                     discard streamPost("music", %*{
                       "action": "load",
-                      "url": "/audio/" & musicFile,
+                      "url": mediaUrl,
                       "volume": volume,
                       "loop": loop,
                       "start_at": startAt})
@@ -2599,9 +2553,8 @@ when isMainModule:
                       "fade_ms": fadeMs,
                       "volume": volume}))
                     mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
-                      "crossfading": true, "file": musicFile, "volume": volume, "fade_ms": fadeMs})}]}))
+                      "crossfading": true, "url": mediaUrl, "volume": volume, "fade_ms": fadeMs})}]}))
                 else:
-                  # No file — crossfade to whatever is pre-loaded on inactive deck
                   discard streamPost("music", addCurve(%*{
                     "action": "crossfade",
                     "fade_ms": fadeMs,
@@ -2609,45 +2562,21 @@ when isMainModule:
                   mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
                     "crossfading": true, "deck": "pre-loaded", "fade_ms": fadeMs})}]}))
               elif action == "queue":
-                let filePath = toolArgs.getOrDefault("file").getStr("")
-                let urlPath = toolArgs.getOrDefault("url").getStr("")
-                var musicFile = ""
-                var musicErr = ""
-                if urlPath.len > 0:
-                  let ext = if urlPath.contains(".mp3"): ".mp3"
-                            elif urlPath.contains(".ogg"): ".ogg"
-                            elif urlPath.contains(".wav"): ".wav"
-                            else: ".mp3"
-                  musicFile = "music_queue_" & $streamLineIndex & ext
-                  let dest = streamAudioDir / musicFile
-                  let client = newHttpClient(timeout = 30000)
-                  try:
-                    client.downloadFile(urlPath, dest)
-                  except:
-                    musicErr = "Failed to download: " & urlPath
-                  finally:
-                    client.close()
-                elif filePath.len > 0:
-                  if not fileExists(filePath):
-                    musicErr = "file not found: " & filePath
-                  else:
-                    let ext2 = splitFile(filePath).ext
-                    musicFile = "music_queue_" & $streamLineIndex & ext2
-                    copyFile(filePath, streamAudioDir / musicFile)
-                else:
-                  musicErr = "file or url is required for queue action"
-                if musicErr.len > 0:
-                  mcpSend(mcpError(id, -32000, musicErr))
+                let (mediaUrl, mediaErr) = resolveMediaFile(
+                  toolArgs.getOrDefault("file").getStr(""),
+                  toolArgs.getOrDefault("url").getStr(""))
+                if mediaErr.len > 0:
+                  mcpSend(mcpError(id, -32000, mediaErr))
                 else:
                   let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
                   let loop = toolArgs.getOrDefault("loop").getBool(false)
                   discard streamPost("music", %*{
                     "action": "queue",
-                    "url": "/audio/" & musicFile,
+                    "url": mediaUrl,
                     "volume": volume,
                     "loop": loop})
                   mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
-                    "queued": true, "file": musicFile})}]}))
+                    "queued": true, "url": mediaUrl})}]}))
               elif action == "next":
                 let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(2000)
                 discard streamPost("music", addCurve(%*{
@@ -2679,42 +2608,18 @@ when isMainModule:
             if (streamProc == nil or not streamProc.running) and not loadStreamState():
               mcpSend(mcpError(id, -32000, "No active stream — call stream_start first"))
             else:
-              let filePath = toolArgs.getOrDefault("file").getStr("")
-              let urlPath = toolArgs.getOrDefault("url").getStr("")
               let volume = toolArgs.getOrDefault("volume").getFloat(0.8)
-              var sfxFile = ""
-              var sfxErr = ""
-              if urlPath.len > 0:
-                let ext = if urlPath.contains(".mp3"): ".mp3"
-                          elif urlPath.contains(".ogg"): ".ogg"
-                          elif urlPath.contains(".wav"): ".wav"
-                          else: ".mp3"
-                sfxFile = "sfx_" & $streamLineIndex & ext
-                let dest = streamAudioDir / sfxFile
-                let client = newHttpClient(timeout = 30000)
-                try:
-                  client.downloadFile(urlPath, dest)
-                except:
-                  sfxErr = "Failed to download: " & urlPath
-                finally:
-                  client.close()
-              elif filePath.len > 0:
-                if not fileExists(filePath):
-                  sfxErr = "file not found: " & filePath
-                else:
-                  let ext2 = splitFile(filePath).ext
-                  sfxFile = "sfx_" & $streamLineIndex & ext2
-                  copyFile(filePath, streamAudioDir / sfxFile)
-              else:
-                sfxErr = "file or url is required"
+              let (sfxUrl, sfxErr) = resolveMediaFile(
+                toolArgs.getOrDefault("file").getStr(""),
+                toolArgs.getOrDefault("url").getStr(""))
               if sfxErr.len > 0:
                 mcpSend(mcpError(id, -32000, sfxErr))
               else:
                 discard streamPost("sfx", %*{
-                  "url": "/audio/" & sfxFile,
+                  "url": sfxUrl,
                   "volume": volume})
                 mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
-                  "played": true, "file": sfxFile, "volume": volume})}]}))
+                  "played": true, "url": sfxUrl, "volume": volume})}]}))
 
           elif toolName == "stream_cast":
             if (streamProc == nil or not streamProc.running) and not loadStreamState():
