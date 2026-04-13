@@ -194,6 +194,7 @@ const server = Bun.serve({
             loop: body.loop,
             fade_ms: body.fade_ms,
             start_at: body.start_at,
+            curve: body.curve,
           });
           return new Response(JSON.stringify({ ok: true }));
 

@@ -52,11 +52,13 @@ export function nameToColor(name: string): string {
     "#ff6b9d", "#64b5f6", "#ce93d8", "#69f0ae", "#ffab40",
     "#4dd0e1", "#ff8a65", "#aed581", "#f48fb1", "#80deea",
   ];
-  let hash = 0;
+  // FNV-1a hash — better distribution for short strings
+  let hash = 2166136261;
   for (let i = 0; i < name.length; i++) {
-    hash = name.charCodeAt(i) + ((hash << 5) - hash);
+    hash ^= name.charCodeAt(i);
+    hash = (hash * 16777619) >>> 0;
   }
-  return colors[Math.abs(hash) % colors.length];
+  return colors[hash % colors.length];
 }
 
 // Mood → color/style mapping

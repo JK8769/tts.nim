@@ -41,3 +41,4 @@ src/res/video-template/bun.lock
 src/res/video-template/bun.lockb
 src/res/video-template/.live-build/
 .playwright-cli/
+.claude/

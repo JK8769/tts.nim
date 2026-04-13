@@ -1177,16 +1177,17 @@ when isMainModule:
            "setting": {"type": "string", "description": "[scene] Location/environment"},
            "characters": {"type": "array", "description": "[scene] Characters present", "items": {"type": "string"}},
            "duration": {"type": "number", "description": "[pause] Silence duration in seconds"}}}}
-      ,{"name": "stream_music", "description": "Control background music on the live stream. Supports play (from file or URL), volume (adjust without restarting), stop, and fade_out. Music auto-ducks when someone is speaking.",
+      ,{"name": "stream_music", "description": "Two-deck DJ mixer. Actions: 'play' (load+fade, auto-crossfade if playing), 'load' (cue track on inactive deck, silent, ready), 'crossfade' (transition to pre-loaded deck), 'curve' (set default curve), 'volume', 'queue', 'next', 'stop', 'fade_out'. Crossfade uses cubic-bezier: incoming=vol*curve(t), outgoing=vol*(1-curve(t)). Presets: linear/ease/easeInOut/smooth/cut/equalPower. Auto-ducks during speech.",
        "inputSchema": {"type": "object", "required": ["action"],
          "properties": {
-           "action": {"type": "string", "description": "play, volume, queue, next, stop, fade_out"},
-           "start_at": {"type": "number", "description": "[play] Start position in seconds (default 0)", "default": 0},
-           "file": {"type": "string", "description": "[play] Path to local audio file (MP3/WAV/OGG)"},
-           "url": {"type": "string", "description": "[play] URL to download audio from (MP3/WAV/OGG)"},
-           "volume": {"type": "number", "description": "[play] Volume 0.0-1.0 (default 0.3)", "default": 0.3},
-           "loop": {"type": "boolean", "description": "[play] Loop the music (default true)", "default": true},
-           "fade_ms": {"type": "integer", "description": "Fade duration in ms (default 1000)", "default": 1000}}}}
+           "action": {"type": "string", "description": "play (load+play/crossfade), load (cue on inactive deck), crossfade (fade to pre-loaded deck), curve, volume, queue, next, stop, fade_out"},
+           "start_at": {"type": "number", "description": "[play/load] Start position in seconds (default 0)", "default": 0},
+           "file": {"type": "string", "description": "[play/load] Path to local audio file (MP3/WAV/OGG)"},
+           "url": {"type": "string", "description": "[play/load] URL to download audio from (MP3/WAV/OGG)"},
+           "volume": {"type": "number", "description": "Volume 0.0-1.0 (default 0.3)", "default": 0.3},
+           "loop": {"type": "boolean", "description": "[play/load] Loop the music (default true)", "default": true},
+           "fade_ms": {"type": "integer", "description": "Crossfade duration in ms (default 1000 for play, 2000 for crossfade/next)", "default": 1000},
+           "curve": {"description": "Crossfade curve — preset name (linear/ease/easeInOut/smooth/cut/equalPower) or [x1,y1,x2,y2]. One curve drives both decks as complements."}}}}
       ,{"name": "stream_sfx", "description": "Play a one-shot sound effect on the live stream. Layers on top of music and speech. Good for transition jingles, chimes, etc.",
        "inputSchema": {"type": "object", "required": ["file"],
          "properties": {
@@ -2246,6 +2247,17 @@ when isMainModule:
               streamAudioDir = getTempDir() / "tts-live-audio"
               createDir(streamAudioDir)
 
+              # Kill any stale server on this port (from previous MCP sessions)
+              try:
+                let lsofOut = execProcess("lsof", args = ["-ti", ":" & $streamPort],
+                  options = {poUsePath})
+                for line in lsofOut.strip.splitLines:
+                  let pid = line.strip
+                  if pid.len > 0:
+                    discard execProcess("kill", args = [pid], options = {poUsePath})
+                sleep(500)
+              except: discard
+
               # Launch live server
               let templateDir = pkgRoot / "res" / "video-template"
               let bunExe = findExe("bun")
@@ -2258,6 +2270,22 @@ when isMainModule:
                   workingDir = templateDir,
                   options = {poUsePath, poStdErrToStdOut})
                 sleep(2000)  # wait for server to start + bundle
+
+                # Open Chrome with autoplay enabled — needs separate user-data-dir
+                # so the flag takes effect even if Chrome is already running
+                let streamUrl = "http://localhost:" & $streamPort
+                let chromeDataDir = getTempDir() / "tts-live-chrome"
+                try:
+                  discard startProcess("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                    args = @["--autoplay-policy=no-user-gesture-required",
+                             "--user-data-dir=" & chromeDataDir,
+                             "--no-first-run", "--no-default-browser-check",
+                             streamUrl],
+                    options = {poUsePath, poStdErrToStdOut, poDaemon})
+                except:
+                  try:
+                    discard startProcess("open", args = @[streamUrl], options = {poUsePath})
+                  except: discard
 
                 # Send init message
                 let header = %*{
@@ -2420,18 +2448,32 @@ when isMainModule:
               mcpSend(mcpError(id, -32000, "No active stream — call stream_start first"))
             else:
               let action = toolArgs["action"].getStr()
-              if action == "play":
+              # Extract curve parameter to pass through to the browser mixer
+              let curveVal = if toolArgs.hasKey("curve"): toolArgs["curve"] else: nil
+              proc addCurve(body: JsonNode): JsonNode =
+                result = body
+                if curveVal != nil and curveVal.kind != JNull: result["curve"] = curveVal
+              if action == "curve":
+                # Set the mixer's default crossfade curve
+                if curveVal == nil or curveVal.kind == JNull:
+                  mcpSend(mcpError(id, -32000, "curve parameter required for curve action"))
+                else:
+                  discard streamPost("music", %*{"action": "curve", "curve": curveVal})
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "action": "curve", "curve": curveVal})}]}))
+              elif action == "load":
+                # Cue a track on the inactive deck — fetch+decode, silent, ready to crossfade
                 let filePath = toolArgs.getOrDefault("file").getStr("")
                 let urlPath = toolArgs.getOrDefault("url").getStr("")
                 var musicFile = ""
                 var musicErr = ""
-                block resolveMusic:
+                block resolveLoad:
                   if urlPath.len > 0:
                     let ext = if urlPath.contains(".mp3"): ".mp3"
                               elif urlPath.contains(".ogg"): ".ogg"
                               elif urlPath.contains(".wav"): ".wav"
                               else: ".mp3"
-                    musicFile = "music_download" & ext
+                    musicFile = "music_" & $streamLineIndex & ext
                     let dest = streamAudioDir / musicFile
                     let client = newHttpClient(timeout = 30000)
                     try:
@@ -2445,7 +2487,50 @@ when isMainModule:
                       musicErr = "file not found: " & filePath
                     else:
                       let ext2 = splitFile(filePath).ext
-                      musicFile = "music_local" & ext2
+                      musicFile = "music_" & $streamLineIndex & ext2
+                      copyFile(filePath, streamAudioDir / musicFile)
+                  else:
+                    musicErr = "file or url is required for load action"
+                if musicErr.len > 0:
+                  mcpSend(mcpError(id, -32000, musicErr))
+                else:
+                  let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
+                  let loop = toolArgs.getOrDefault("loop").getBool(true)
+                  let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
+                  discard streamPost("music", %*{
+                    "action": "load",
+                    "url": "/audio/" & musicFile,
+                    "volume": volume,
+                    "loop": loop,
+                    "start_at": startAt})
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "loaded": true, "file": musicFile, "deck": "inactive"})}]}))
+              elif action == "play":
+                let filePath = toolArgs.getOrDefault("file").getStr("")
+                let urlPath = toolArgs.getOrDefault("url").getStr("")
+                var musicFile = ""
+                var musicErr = ""
+                block resolveMusic:
+                  if urlPath.len > 0:
+                    let ext = if urlPath.contains(".mp3"): ".mp3"
+                              elif urlPath.contains(".ogg"): ".ogg"
+                              elif urlPath.contains(".wav"): ".wav"
+                              else: ".mp3"
+                    musicFile = "music_" & $streamLineIndex & ext
+                    let dest = streamAudioDir / musicFile
+                    let client = newHttpClient(timeout = 30000)
+                    try:
+                      client.downloadFile(urlPath, dest)
+                    except:
+                      musicErr = "Failed to download: " & urlPath
+                    finally:
+                      client.close()
+                  elif filePath.len > 0:
+                    if not fileExists(filePath):
+                      musicErr = "file not found: " & filePath
+                    else:
+                      let ext2 = splitFile(filePath).ext
+                      musicFile = "music_" & $streamLineIndex & ext2
                       copyFile(filePath, streamAudioDir / musicFile)
                   else:
                     musicErr = "file or url is required for play action"
@@ -2456,15 +2541,73 @@ when isMainModule:
                   let loop = toolArgs.getOrDefault("loop").getBool(true)
                   let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(1000)
                   let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
-                  discard streamPost("music", %*{
+                  discard streamPost("music", addCurve(%*{
                     "action": "play",
                     "url": "/audio/" & musicFile,
                     "volume": volume,
                     "loop": loop,
                     "fade_ms": fadeMs,
-                    "start_at": startAt})
+                    "start_at": startAt}))
                   mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
                     "playing": true, "file": musicFile, "volume": volume, "loop": loop})}]}))
+              elif action == "crossfade":
+                # Crossfade to pre-loaded inactive deck, or load+crossfade if file given
+                let filePath = toolArgs.getOrDefault("file").getStr("")
+                let urlPath = toolArgs.getOrDefault("url").getStr("")
+                let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(2000)
+                let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
+                if filePath.len > 0 or urlPath.len > 0:
+                  # Load first, then crossfade (convenience shortcut)
+                  var musicFile = ""
+                  var musicErr = ""
+                  block resolveCrossfade:
+                    if urlPath.len > 0:
+                      let ext = if urlPath.contains(".mp3"): ".mp3"
+                                elif urlPath.contains(".ogg"): ".ogg"
+                                elif urlPath.contains(".wav"): ".wav"
+                                else: ".mp3"
+                      musicFile = "music_" & $streamLineIndex & ext
+                      let dest = streamAudioDir / musicFile
+                      let client = newHttpClient(timeout = 30000)
+                      try:
+                        client.downloadFile(urlPath, dest)
+                      except:
+                        musicErr = "Failed to download: " & urlPath
+                      finally:
+                        client.close()
+                    elif filePath.len > 0:
+                      if not fileExists(filePath):
+                        musicErr = "file not found: " & filePath
+                      else:
+                        let ext2 = splitFile(filePath).ext
+                        musicFile = "music_" & $streamLineIndex & ext2
+                        copyFile(filePath, streamAudioDir / musicFile)
+                  if musicErr.len > 0:
+                    mcpSend(mcpError(id, -32000, musicErr))
+                  else:
+                    let loop = toolArgs.getOrDefault("loop").getBool(true)
+                    let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
+                    # Load on inactive deck then crossfade
+                    discard streamPost("music", %*{
+                      "action": "load",
+                      "url": "/audio/" & musicFile,
+                      "volume": volume,
+                      "loop": loop,
+                      "start_at": startAt})
+                    discard streamPost("music", addCurve(%*{
+                      "action": "crossfade",
+                      "fade_ms": fadeMs,
+                      "volume": volume}))
+                    mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                      "crossfading": true, "file": musicFile, "volume": volume, "fade_ms": fadeMs})}]}))
+                else:
+                  # No file — crossfade to whatever is pre-loaded on inactive deck
+                  discard streamPost("music", addCurve(%*{
+                    "action": "crossfade",
+                    "fade_ms": fadeMs,
+                    "volume": volume}))
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "crossfading": true, "deck": "pre-loaded", "fade_ms": fadeMs})}]}))
               elif action == "queue":
                 let filePath = toolArgs.getOrDefault("file").getStr("")
                 let urlPath = toolArgs.getOrDefault("url").getStr("")
@@ -2507,9 +2650,9 @@ when isMainModule:
                     "queued": true, "file": musicFile})}]}))
               elif action == "next":
                 let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(2000)
-                discard streamPost("music", %*{
+                discard streamPost("music", addCurve(%*{
                   "action": "next",
-                  "fade_ms": fadeMs})
+                  "fade_ms": fadeMs}))
                 mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
                   "action": "next", "fade_ms": fadeMs})}]}))
               elif action == "volume":

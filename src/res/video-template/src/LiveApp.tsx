@@ -7,8 +7,6 @@ interface LiveEntry extends TimelineEntry {
   audioUrl?: string;
 }
 
-const FPS = 30;
-
 // ---- Types ----
 
 type WSMessage =
@@ -16,7 +14,7 @@ type WSMessage =
   | { type: "line"; entry: LiveEntry; scriptLine?: ScriptLine }
   | { type: "chapter"; text: string; index: number }
   | { type: "scene"; entry: LiveEntry; scriptLine?: ScriptLine }
-  | { type: "music"; action: string; url?: string; volume?: number; loop?: boolean; fade_ms?: number; start_at?: number }
+  | { type: "music"; action: string; url?: string; volume?: number; loop?: boolean; fade_ms?: number; start_at?: number; curve?: string | [number, number, number, number] }
   | { type: "sfx"; url: string; volume?: number }
   | { type: "cast"; cast: Record<string, string> }
   | { type: "stop" };
@@ -84,16 +82,98 @@ class AudioQueue {
 
 // ---- Background music player with auto-ducking ----
 
-class MusicPlayer {
+/**
+ * Solve cubic bezier at parameter t for one axis.
+ * Control points: P0=0, P1=cp1, P2=cp2, P3=1
+ */
+function cubicBezier1D(t: number, cp1: number, cp2: number): number {
+  const u = 1 - t;
+  return 3 * u * u * t * cp1 + 3 * u * t * t * cp2 + t * t * t;
+}
+
+/** Find the bezier parameter t for a given x using Newton's method. */
+function bezierTForX(x: number, x1: number, x2: number): number {
+  let t = x;
+  for (let i = 0; i < 8; i++) {
+    const cx = cubicBezier1D(t, x1, x2) - x;
+    if (Math.abs(cx) < 1e-6) break;
+    // derivative: 3(1-t)^2*x1 + 6(1-t)t*x2 - 6(1-t)t*x1 + 3t^2*(1-x2) ... simplified:
+    const u = 1 - t;
+    const dx = 3 * u * u * x1 + 6 * u * t * (x2 - x1) + 3 * t * t * (1 - x2);
+    if (Math.abs(dx) < 1e-6) break;
+    t -= cx / dx;
+    t = Math.max(0, Math.min(1, t));
+  }
+  return t;
+}
+
+/**
+ * Generate a gain curve (Float32Array) from cubic-bezier control points.
+ * Like CSS cubic-bezier(x1,y1,x2,y2) — maps normalized time [0,1] to value [from,to].
+ */
+function bezierCurve(
+  steps: number, from: number, to: number,
+  x1: number, y1: number, x2: number, y2: number
+): Float32Array {
+  const curve = new Float32Array(steps);
+  for (let i = 0; i < steps; i++) {
+    const x = i / (steps - 1);
+    const t = bezierTForX(x, x1, x2);
+    const y = cubicBezier1D(t, y1, y2);
+    curve[i] = from + (to - from) * y;
+  }
+  return curve;
+}
+
+/**
+ * Generate a linked crossfade pair from one curve.
+ * The curve defines the incoming deck (0→inVol).
+ * The outgoing deck is the complement (outVol→0), so at any time t:
+ *   gainIn(t) + gainOut(t) = volume
+ */
+function crossfadePair(
+  steps: number, outVol: number, inVol: number,
+  x1: number, y1: number, x2: number, y2: number
+): { fadeIn: Float32Array; fadeOut: Float32Array } {
+  const fadeIn = new Float32Array(steps);
+  const fadeOut = new Float32Array(steps);
+  for (let i = 0; i < steps; i++) {
+    const x = i / (steps - 1);
+    const t = bezierTForX(x, x1, x2);
+    const y = cubicBezier1D(t, y1, y2); // 0→1 normalized
+    fadeIn[i] = inVol * y;
+    fadeOut[i] = outVol * (1 - y);
+  }
+  return { fadeIn, fadeOut };
+}
+
+// Preset crossfade curves: [x1, y1, x2, y2]
+const CURVES = {
+  linear:     [0, 0, 1, 1] as const,
+  ease:       [0.25, 0.1, 0.25, 1] as const,
+  easeInOut:  [0.42, 0, 0.58, 1] as const,
+  smooth:     [0.4, 0, 0.2, 1] as const,    // slow start, gentle landing
+  cut:        [0.9, 0, 1, 0.1] as const,     // DJ hard cut
+  equalPower: [0.5, 0, 0.5, 1] as const,     // equal-power-ish S-curve
+};
+
+type CurveName = keyof typeof CURVES;
+type CurveSpec = CurveName | [number, number, number, number];
+
+function resolveCurve(spec: CurveSpec): [number, number, number, number] {
+  if (typeof spec === "string") return [...CURVES[spec]] as [number, number, number, number];
+  return spec;
+}
+
+/** A single audio deck with its own source and gain node. */
+class Deck {
+  source: AudioBufferSourceNode | null = null;
+  gain: GainNode;
+  url = "";
   private ctx: AudioContext;
-  private gain: GainNode;
-  private source: AudioBufferSourceNode | null = null;
-  private buffer: AudioBuffer | null = null;
-  private currentUrl = "";
-  private baseVolume = 0.3;
-  private duckVolume = 0.08;
-  private ducked = false;
-  private playlist: { url: string; volume?: number; loop?: boolean }[] = [];
+  private buffer: AudioBuffer | null = null;  // pre-loaded buffer (cued)
+  cueLoop = false;
+  private cueStartAt = 0;
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
@@ -102,31 +182,211 @@ class MusicPlayer {
     this.gain.connect(ctx.destination);
   }
 
-  async play(url: string, volume = 0.3, loop = true, fadeMs = 1000, startAt = 0) {
-    this.stop(0);
+  /** Fetch, decode, and immediately start playback. */
+  async load(url: string, loop: boolean, startAt: number, onEnded?: () => void) {
+    this.stop();
+    await this.cue(url, loop, startAt);
+    this.start(onEnded);
+  }
+
+  /** Fetch and decode audio into the buffer — ready to start, but silent. */
+  async cue(url: string, loop = true, startAt = 0) {
+    this.stop();
+    this.url = url;
+    this.cueLoop = loop;
+    this.cueStartAt = startAt;
+    const resp = await fetch(url);
+    const buf = await resp.arrayBuffer();
+    this.buffer = await this.ctx.decodeAudioData(buf);
+  }
+
+  /** Start playback from a cued buffer. No-op if nothing is cued. */
+  start(onEnded?: () => void) {
+    if (!this.buffer) return;
+    // Stop any existing source before creating a new one
+    if (this.source) {
+      try { this.source.stop(); } catch {}
+      try { this.source.disconnect(); } catch {}
+    }
+    this.source = this.ctx.createBufferSource();
+    this.source.buffer = this.buffer;
+    this.source.loop = this.cueLoop;
+    this.source.connect(this.gain);
+    if (onEnded) this.source.onended = onEnded;
+    this.source.start(0, this.cueStartAt);
+  }
+
+  /** Whether this deck has a track cued and ready to play. */
+  get cued() { return this.buffer !== null && this.source === null; }
+
+  /** Fade gain along a bezier curve from→to over durationMs. */
+  curvedFade(from: number, to: number, durationMs: number, curve: CurveSpec = "easeInOut") {
+    const [x1, y1, x2, y2] = resolveCurve(curve);
+    const steps = Math.max(2, Math.round(durationMs / 10)); // ~100Hz resolution
+    const values = bezierCurve(steps, from, to, x1, y1, x2, y2);
+    this.applyCurve(values, durationMs);
+  }
+
+  /** Apply a pre-computed gain curve over durationMs. */
+  applyCurve(values: Float32Array, durationMs: number) {
+    const now = this.ctx.currentTime;
+    this.gain.gain.cancelScheduledValues(now);
+    this.gain.gain.setValueAtTime(values[0], now);
+    this.gain.gain.setValueCurveAtTime(values, now, durationMs / 1000);
+  }
+
+  fadeTo(target: number, fadeMs: number, curve: CurveSpec = "easeInOut") {
+    this.curvedFade(this.gain.gain.value, target, fadeMs, curve);
+  }
+
+  stop() {
+    if (this.source) {
+      try { this.source.stop(); } catch {}
+      try { this.source.disconnect(); } catch {}
+      this.source = null;
+    }
+    this.buffer = null;
+    this.url = "";
+    this.gain.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.gain.gain.value = 0;
+  }
+
+  fadeOutAndStop(fadeMs: number, curve: CurveSpec = "easeInOut") {
+    if (!this.source) return;
+    this.curvedFade(this.gain.gain.value, 0, fadeMs, curve);
+    this.scheduleStop(fadeMs);
+  }
+
+  /** Apply a pre-computed fade-out curve and stop the source after it completes. */
+  applyCurveAndStop(values: Float32Array, durationMs: number) {
+    if (!this.source) return;
+    this.applyCurve(values, durationMs);
+    this.scheduleStop(durationMs);
+  }
+
+  private scheduleStop(fadeMs: number) {
+    const src = this.source;
+    this.source = null;
+    this.buffer = null;
+    this.url = "";
+    if (!src) return;
+    setTimeout(() => {
+      try { src.stop(); } catch {}
+      try { src.disconnect(); } catch {}
+    }, fadeMs + 100);
+  }
+
+  get playing() { return this.source !== null; }
+}
+
+/**
+ * Two-deck DJ mixer with cubic-bezier crossfade curves.
+ *
+ * One curve defines the crossfade shape. At any point t during the transition:
+ *   incoming gain = target * curve(t)
+ *   outgoing gain = target * (1 - curve(t))
+ *
+ * This guarantees gainIn + gainOut = target volume at all times,
+ * just like a physical DJ crossfader.
+ *
+ * Use preset names ("linear", "ease", "easeInOut", "smooth", "cut", "equalPower")
+ * or custom [x1,y1,x2,y2] control points like CSS cubic-bezier().
+ */
+class AudioMixer {
+  private ctx: AudioContext;
+  private deckA: Deck;
+  private deckB: Deck;
+  private active: "A" | "B" = "A";
+  private sfxGain: GainNode;
+  private baseVolume = 0.3;
+  private duckVolume = 0.08;
+  private ducked = false;
+  private playlist: { url: string; volume?: number; loop?: boolean }[] = [];
+  private defaultCurve: CurveSpec = "easeInOut";
+
+  constructor(ctx: AudioContext) {
+    this.ctx = ctx;
+    this.deckA = new Deck(ctx);
+    this.deckB = new Deck(ctx);
+    this.sfxGain = ctx.createGain();
+    this.sfxGain.gain.value = 1.0;
+    this.sfxGain.connect(ctx.destination);
+  }
+
+  private get activeDeck() { return this.active === "A" ? this.deckA : this.deckB; }
+  private get inactiveDeck() { return this.active === "A" ? this.deckB : this.deckA; }
+  private flip() { this.active = this.active === "A" ? "B" : "A"; }
+
+  /** Set the default crossfade curve for all transitions. */
+  setCurve(curve: CurveSpec) { this.defaultCurve = curve; }
+
+  /** Cue a track on the inactive deck — fetches, decodes, ready to crossfade. */
+  async cue(url: string, loop = true, startAt = 0, volume?: number) {
+    if (volume !== undefined) {
+      this.baseVolume = volume;
+      this.duckVolume = volume * 0.25;
+    }
+    try {
+      await this.inactiveDeck.cue(url, loop, startAt);
+    } catch (e) {
+      console.error("Cue error:", e);
+    }
+  }
+
+  /** Crossfade from active deck to inactive deck. Uses pre-cued track if available. */
+  crossfade(fadeMs = 2000, curve?: CurveSpec, volume?: number) {
+    if (volume !== undefined) {
+      this.baseVolume = volume;
+      this.duckVolume = volume * 0.25;
+    }
+    const target = this.ducked ? this.duckVolume : this.baseVolume;
+    const c = curve ?? this.defaultCurve;
+
+    if (!this.inactiveDeck.cued) {
+      console.warn("Crossfade: nothing cued on inactive deck");
+      return;
+    }
+
+    const outVol = this.activeDeck.playing ? this.activeDeck.gain.gain.value : 0;
+    const steps = Math.max(2, Math.round(fadeMs / 10));
+    const [x1, y1, x2, y2] = resolveCurve(c);
+    const { fadeIn, fadeOut } = crossfadePair(steps, outVol, target, x1, y1, x2, y2);
+
+    const outgoing = this.activeDeck;
+    this.flip();
+    const incoming = this.activeDeck;
+
+    if (outgoing.playing) outgoing.applyCurveAndStop(fadeOut, fadeMs);
+    const onEnded = !incoming.cueLoop && this.playlist.length > 0 ? () => this.next() : undefined;
+    incoming.start(onEnded);
+    incoming.applyCurve(fadeIn, fadeMs);
+  }
+
+  async play(url: string, volume = 0.3, loop = true, fadeMs = 1000, startAt = 0, curve?: CurveSpec) {
     this.baseVolume = volume;
     this.duckVolume = volume * 0.25;
-    this.currentUrl = url;
-    try {
-      const resp = await fetch(url);
-      const buf = await resp.arrayBuffer();
-      const audio = await this.ctx.decodeAudioData(buf);
-      this.buffer = audio;
-      this.source = this.ctx.createBufferSource();
-      this.source.buffer = audio;
-      this.source.loop = loop;
-      this.source.connect(this.gain);
-      // If not looping, auto-advance to next in playlist when done
-      if (!loop && this.playlist.length > 0) {
-        this.source.onended = () => this.next();
+    const target = this.ducked ? this.duckVolume : this.baseVolume;
+    const c = curve ?? this.defaultCurve;
+
+    if (this.activeDeck.playing) {
+      // Cue on inactive deck then crossfade
+      try {
+        await this.inactiveDeck.cue(url, loop, startAt);
+      } catch (e) {
+        console.error("Music error:", e);
+        return;
       }
-      this.source.start(0, startAt);
-      // Fade in
-      const target = this.ducked ? this.duckVolume : this.baseVolume;
-      this.gain.gain.setValueAtTime(0, this.ctx.currentTime);
-      this.gain.gain.linearRampToValueAtTime(target, this.ctx.currentTime + fadeMs / 1000);
-    } catch (e) {
-      console.error("Music error:", e);
+      this.crossfade(fadeMs, c);
+    } else {
+      // No crossfade needed — just fade in on active deck
+      const deck = this.activeDeck;
+      const onEnded = !loop && this.playlist.length > 0 ? () => this.next() : undefined;
+      try {
+        await deck.load(url, loop, startAt, onEnded);
+        deck.curvedFade(0, target, fadeMs, c);
+      } catch (e) {
+        console.error("Music error:", e);
+      }
     }
   }
 
@@ -134,39 +394,24 @@ class MusicPlayer {
     this.playlist.push({ url, volume, loop });
   }
 
-  async next(crossfadeMs = 2000) {
+  async next(crossfadeMs = 2000, curve?: CurveSpec) {
     const item = this.playlist.shift();
     if (!item) return;
-    // Crossfade: move old source to a temporary gain for fade-out,
-    // then start new source on the main gain for fade-in
-    if (this.source) {
-      const oldSrc = this.source;
-      const oldGain = this.ctx.createGain();
-      oldGain.gain.setValueAtTime(this.gain.gain.value, this.ctx.currentTime);
-      oldGain.connect(this.ctx.destination);
-      oldSrc.disconnect();
-      oldSrc.connect(oldGain);
-      const now = this.ctx.currentTime;
-      oldGain.gain.linearRampToValueAtTime(0, now + crossfadeMs / 1000);
-      setTimeout(() => { try { oldSrc.stop(); } catch {} }, crossfadeMs + 100);
-      this.source = null;
-      this.buffer = null;
+    this.baseVolume = item.volume ?? this.baseVolume;
+    this.duckVolume = this.baseVolume * 0.25;
+    // Cue on inactive deck then crossfade
+    try {
+      await this.inactiveDeck.cue(item.url, item.loop ?? false, 0);
+    } catch (e) {
+      console.error("Music next error:", e);
+      return;
     }
-    // Reset main gain and start new track
-    this.gain.gain.setValueAtTime(0, this.ctx.currentTime);
-    this.play(item.url, item.volume ?? this.baseVolume, item.loop ?? false, crossfadeMs);
+    this.crossfade(crossfadeMs, curve ?? this.defaultCurve);
   }
 
   stop(fadeMs = 1000) {
-    if (!this.source) return;
-    const now = this.ctx.currentTime;
-    this.gain.gain.cancelScheduledValues(now);
-    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
-    this.gain.gain.linearRampToValueAtTime(0, now + fadeMs / 1000);
-    const src = this.source;
-    this.source = null;
-    this.buffer = null;
-    setTimeout(() => { try { src.stop(); } catch {} }, fadeMs + 100);
+    this.deckA.fadeOutAndStop(fadeMs, this.defaultCurve);
+    this.deckB.fadeOutAndStop(fadeMs, this.defaultCurve);
   }
 
   fadeOut(fadeMs = 2000) {
@@ -174,55 +419,33 @@ class MusicPlayer {
   }
 
   duck() {
-    if (this.ducked || !this.source) return;
+    if (this.ducked) return;
     this.ducked = true;
-    const now = this.ctx.currentTime;
-    this.gain.gain.cancelScheduledValues(now);
-    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
-    this.gain.gain.linearRampToValueAtTime(this.duckVolume, now + 0.3);
+    if (this.activeDeck.playing) this.activeDeck.fadeTo(this.duckVolume, 300);
   }
 
   unduck() {
-    if (!this.ducked || !this.source) return;
+    if (!this.ducked) return;
     this.ducked = false;
-    const now = this.ctx.currentTime;
-    this.gain.gain.cancelScheduledValues(now);
-    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
-    this.gain.gain.linearRampToValueAtTime(this.baseVolume, now + 0.5);
+    if (this.activeDeck.playing) this.activeDeck.fadeTo(this.baseVolume, 500);
   }
 
   setVolume(volume: number, fadeMs = 1000) {
     this.baseVolume = volume;
     this.duckVolume = volume * 0.25;
-    if (!this.source) return;
     const target = this.ducked ? this.duckVolume : this.baseVolume;
-    const now = this.ctx.currentTime;
-    this.gain.gain.cancelScheduledValues(now);
-    this.gain.gain.setValueAtTime(this.gain.gain.value, now);
-    this.gain.gain.linearRampToValueAtTime(target, now + fadeMs / 1000);
-  }
-}
-
-class SfxPlayer {
-  private ctx: AudioContext;
-  private gain: GainNode;
-
-  constructor(ctx: AudioContext) {
-    this.ctx = ctx;
-    this.gain = ctx.createGain();
-    this.gain.gain.value = 1.0;
-    this.gain.connect(ctx.destination);
+    if (this.activeDeck.playing) this.activeDeck.fadeTo(target, fadeMs);
   }
 
-  async play(url: string, volume = 0.8) {
+  async playSfx(url: string, volume = 0.8) {
     try {
       const resp = await fetch(url);
       const buf = await resp.arrayBuffer();
       const audio = await this.ctx.decodeAudioData(buf);
       const src = this.ctx.createBufferSource();
       src.buffer = audio;
-      this.gain.gain.value = volume;
-      src.connect(this.gain);
+      this.sfxGain.gain.value = volume;
+      src.connect(this.sfxGain);
       src.start();
     } catch (e) {
       console.error("SFX error:", e);
@@ -497,13 +720,13 @@ export const LiveApp: React.FC = () => {
   const startedRef = useRef(false);
   const pendingRef = useRef<WSMessage[]>([]);
   const audioQueue = useRef(new AudioQueue());
-  const musicPlayer = useRef<MusicPlayer | null>(null);
+  const mixer = useRef<AudioMixer | null>(null);
   const timelineRef = useRef<LiveEntry[]>([]);
   const subtitleGen = useRef(0); // generation counter to prevent stale timeouts clearing subtitles
 
+  // Subtitle synced to audio playback — shows when audio starts, clears when it ends.
   audioQueue.current.onStart = (url) => {
     const entry = timelineRef.current.find((e) => e.audioUrl === url);
-
     if (entry) {
       subtitleGen.current++;
       setActiveSpeaker(entry.name);
@@ -513,20 +736,13 @@ export const LiveApp: React.FC = () => {
   };
 
   audioQueue.current.onEnd = () => {
-
     subtitleGen.current++;
     setSubtitle(null);
+    setActiveSpeaker("");
   };
 
-  audioQueue.current.onSpeechStart = () => {
-
-    musicPlayer.current?.duck();
-  };
-
-  audioQueue.current.onSpeechEnd = () => {
-
-    musicPlayer.current?.unduck();
-  };
+  audioQueue.current.onSpeechStart = () => { mixer.current?.duck(); };
+  audioQueue.current.onSpeechEnd = () => { mixer.current?.unduck(); };
 
   const replayingRef = useRef(false);
 
@@ -535,7 +751,6 @@ export const LiveApp: React.FC = () => {
 
     switch (msg.type) {
       case "init":
-
         setHeader(msg.header);
         const names = Object.keys(msg.header.cast || {});
         setCast(names);
@@ -560,10 +775,12 @@ export const LiveApp: React.FC = () => {
         if (isReplay) {
           break;
         }
+
         if (entry.audioUrl) {
+          // Subtitle will appear via onStart when audio actually plays
           audioQueue.current.play(entry.audioUrl);
         } else if (entry.type === "scene") {
-          // For non-narrated scenes, show as subtitle briefly
+          // Non-narrated scenes: show subtitle with timer
           const gen = ++subtitleGen.current;
           setSubtitle({ name: "scene", text: entry.text });
           setTimeout(() => { if (subtitleGen.current === gen) setSubtitle(null); }, (entry.duration || 3) * 1000);
@@ -582,23 +799,30 @@ export const LiveApp: React.FC = () => {
       case "music": {
         if (isReplay) break;
         audioQueue.current.ensure();
-        if (!musicPlayer.current && audioQueue.current.ctx) {
-          musicPlayer.current = new MusicPlayer(audioQueue.current.ctx);
+        if (!mixer.current && audioQueue.current.ctx) {
+          mixer.current = new AudioMixer(audioQueue.current.ctx);
         }
-        const mp = musicPlayer.current;
-        if (!mp) break;
-        if (msg.action === "play" && msg.url) {
-          mp.play(msg.url, msg.volume ?? 0.3, msg.loop ?? true, msg.fade_ms ?? 1000, msg.start_at ?? 0);
+        const mx = mixer.current;
+        if (!mx) break;
+        const curve = msg.curve as CurveSpec | undefined;
+        if (msg.action === "curve" && msg.curve) {
+          mx.setCurve(msg.curve as CurveSpec);
+        } else if (msg.action === "load" && msg.url) {
+          mx.cue(msg.url, msg.loop ?? true, msg.start_at ?? 0, msg.volume);
+        } else if (msg.action === "crossfade") {
+          mx.crossfade(msg.fade_ms ?? 2000, curve, msg.volume);
+        } else if (msg.action === "play" && msg.url) {
+          mx.play(msg.url, msg.volume ?? 0.3, msg.loop ?? true, msg.fade_ms ?? 1000, msg.start_at ?? 0, curve);
         } else if (msg.action === "queue" && msg.url) {
-          mp.enqueue(msg.url, msg.volume, msg.loop);
+          mx.enqueue(msg.url, msg.volume, msg.loop);
         } else if (msg.action === "next") {
-          mp.next(msg.fade_ms ?? 2000);
+          mx.next(msg.fade_ms ?? 2000, curve);
         } else if (msg.action === "stop") {
-          mp.stop(msg.fade_ms ?? 1000);
+          mx.stop(msg.fade_ms ?? 1000);
         } else if (msg.action === "fade_out") {
-          mp.fadeOut(msg.fade_ms ?? 2000);
+          mx.fadeOut(msg.fade_ms ?? 2000);
         } else if (msg.action === "volume") {
-          mp.setVolume(msg.volume ?? 0.3, msg.fade_ms ?? 1000);
+          mx.setVolume(msg.volume ?? 0.3, msg.fade_ms ?? 1000);
         }
         break;
       }
@@ -606,43 +830,95 @@ export const LiveApp: React.FC = () => {
       case "sfx": {
         if (isReplay) break;
         audioQueue.current.ensure();
-        if (audioQueue.current.ctx) {
-          const sfx = new SfxPlayer(audioQueue.current.ctx);
-          sfx.play(msg.url, msg.volume ?? 0.8);
+        if (!mixer.current && audioQueue.current.ctx) {
+          mixer.current = new AudioMixer(audioQueue.current.ctx);
         }
+        mixer.current?.playSfx(msg.url, msg.volume ?? 0.8);
         break;
       }
 
       case "stop":
-        musicPlayer.current?.stop(500);
+        mixer.current?.stop(500);
         break;
     }
   }
 
+  const ensureAudio = useCallback(() => {
+    audioQueue.current.ensure();
+    if (!mixer.current && audioQueue.current.ctx) {
+      mixer.current = new AudioMixer(audioQueue.current.ctx);
+    }
+  }, []);
+
+  // Auto-unlock audio: play a silent <audio> element to prime browser autoplay.
+  // Chrome allows <audio autoplay> on localhost, which then unlocks AudioContext.
+  useEffect(() => {
+    // Generate a tiny silent WAV (44 bytes header + 0 samples)
+    const header = new ArrayBuffer(44);
+    const v = new DataView(header);
+    const s = (o: number, str: string) => { for (let i = 0; i < str.length; i++) v.setUint8(o + i, str.charCodeAt(i)); };
+    s(0, "RIFF"); v.setUint32(4, 36, true); s(8, "WAVE");
+    s(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true);
+    v.setUint16(22, 1, true); v.setUint32(24, 8000, true); v.setUint32(28, 8000, true);
+    v.setUint16(32, 1, true); v.setUint16(34, 8, true); s(36, "data"); v.setUint32(40, 0, true);
+    const blob = new Blob([header], { type: "audio/wav" });
+    const url = URL.createObjectURL(blob);
+    const a = new Audio(url);
+    a.autoplay = true;
+    a.volume = 0;
+    a.play().then(() => {
+      // Audio autoplay succeeded — now AudioContext will be unlocked too
+      ensureAudio();
+      URL.revokeObjectURL(url);
+    }).catch(() => {
+      // Autoplay blocked — fall back to gesture-based unlock
+      URL.revokeObjectURL(url);
+    });
+  }, []);
+
   const handleMessage = useCallback((msg: WSMessage) => {
-    // Init messages apply immediately (they set title/cast for the overlay)
     if (msg.type === "init") {
       applyMessage(msg);
+      if (!startedRef.current) {
+        startedRef.current = true;
+        setStarted(true);
+        ensureAudio();
+      }
       return;
     }
     if (!startedRef.current) {
       pendingRef.current.push(msg);
       return;
     }
+    ensureAudio();
     applyMessage(msg);
   }, []);
 
-  const handleStart = useCallback(() => {
-    startedRef.current = true;
-    setStarted(true);
-    audioQueue.current.ensure();
-    if (!musicPlayer.current && audioQueue.current.ctx) {
-      musicPlayer.current = new MusicPlayer(audioQueue.current.ctx);
+  // Replay pending messages once we're started (from WebSocket replay)
+  useEffect(() => {
+    if (started && pendingRef.current.length > 0) {
+      replayingRef.current = true;
+      for (const msg of pendingRef.current) applyMessage(msg);
+      replayingRef.current = false;
+      pendingRef.current = [];
     }
-    replayingRef.current = true;
-    for (const msg of pendingRef.current) applyMessage(msg);
-    replayingRef.current = false;
-    pendingRef.current = [];
+  }, [started]);
+
+  // Fallback: resume AudioContext on user gesture if autoplay was blocked
+  useEffect(() => {
+    const resume = () => {
+      ensureAudio();
+      const ctx = audioQueue.current.ctx;
+      if (ctx && ctx.state === "suspended") ctx.resume();
+    };
+    window.addEventListener("click", resume);
+    window.addEventListener("touchstart", resume);
+    window.addEventListener("keydown", resume);
+    return () => {
+      window.removeEventListener("click", resume);
+      window.removeEventListener("touchstart", resume);
+      window.removeEventListener("keydown", resume);
+    };
   }, []);
 
   useEffect(() => {
@@ -674,7 +950,6 @@ export const LiveApp: React.FC = () => {
   }, [handleMessage]);
 
   const title = header.title || "Live Radio Studio";
-  const castNames = Object.keys(header.cast || {});
   const moodColor = (moodColors[mood] ?? moodColors.default).accent;
   const panelWidth = 1920 / (cast.length + 1);
 
@@ -728,19 +1003,15 @@ export const LiveApp: React.FC = () => {
           {/* Subtitle */}
           {subtitle && <Subtitle name={subtitle.name} text={subtitle.text} />}
 
-          {/* Click-to-start */}
-          {!started && (
-            <div onClick={handleStart} style={{
-              position: "absolute", inset: 0, backgroundColor: "rgba(0,0,0,0.85)",
-              display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
-              cursor: "pointer", zIndex: 200,
+          {/* Connecting indicator */}
+          {!connected && !started && (
+            <div style={{
+              position: "absolute", top: 16, left: "50%", transform: "translateX(-50%)",
+              padding: "8px 16px", borderRadius: 8,
+              backgroundColor: "rgba(255,255,255,0.1)",
+              color: "#666", fontSize: 14, fontFamily: "sans-serif", zIndex: 100,
             }}>
-              <div style={{ width: 80, height: 80, borderRadius: "50%", border: "3px solid #fff", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 24 }}>
-                <div style={{ width: 0, height: 0, borderTop: "18px solid transparent", borderBottom: "18px solid transparent", borderLeft: "30px solid #fff", marginLeft: 6 }} />
-              </div>
-              <div style={{ color: "#fff", fontSize: 28, fontFamily: "sans-serif", fontWeight: 300, letterSpacing: 4, textTransform: "uppercase" }}>{title}</div>
-              {castNames.length > 0 && <div style={{ color: "#666", fontSize: 16, fontFamily: "sans-serif", marginTop: 12, letterSpacing: 2 }}>{castNames.join(" \u00B7 ")}</div>}
-              <div style={{ color: "#444", fontSize: 14, fontFamily: "sans-serif", marginTop: 32 }}>{connected ? "Click to start" : "Connecting..."}</div>
+              Connecting...
             </div>
           )}
 
