@@ -1193,6 +1193,12 @@ when isMainModule:
            "file": {"type": "string", "description": "Path to audio file (MP3/WAV/OGG)"},
            "url": {"type": "string", "description": "URL to download audio from"},
            "volume": {"type": "number", "description": "Volume 0.0-1.0 (default 0.8)", "default": 0.8}}}}
+      ,{"name": "stream_cast", "description": "Dynamically add or remove hosts from the live stream. Updates the cast on screen in real-time.",
+       "inputSchema": {"type": "object", "required": ["action", "name"],
+         "properties": {
+           "action": {"type": "string", "description": "add or remove"},
+           "name": {"type": "string", "description": "Character name"},
+           "voice": {"type": "string", "description": "[add] Voice ID for the new character"}}}}
       ,{"name": "stream_analyze", "description": "Analyze a music file's loudness timeline. Returns per-segment RMS levels so you can time dialogue around quiet/loud sections. Requires ffmpeg.",
        "inputSchema": {"type": "object", "required": ["file"],
          "properties": {
@@ -2566,6 +2572,38 @@ when isMainModule:
                   "volume": volume})
                 mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
                   "played": true, "file": sfxFile, "volume": volume})}]}))
+
+          elif toolName == "stream_cast":
+            if (streamProc == nil or not streamProc.running) and not loadStreamState():
+              mcpSend(mcpError(id, -32000, "No active stream — call stream_start first"))
+            else:
+              let action = toolArgs["action"].getStr()
+              let name = toolArgs["name"].getStr()
+              if action == "add":
+                let voice = toolArgs.getOrDefault("voice").getStr("")
+                if voice.len == 0:
+                  mcpSend(mcpError(id, -32000, "voice is required for add action"))
+                else:
+                  if streamCast == nil:
+                    streamCast = newJObject()
+                  streamCast[name] = %voice
+                  discard streamPost("cast", %*{"cast": streamCast})
+                  saveStreamState()
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "action": "add", "name": name, "voice": voice,
+                    "cast": streamCast})}]}))
+              elif action == "remove":
+                if streamCast != nil and streamCast.hasKey(name):
+                  streamCast.delete(name)
+                  discard streamPost("cast", %*{"cast": streamCast})
+                  saveStreamState()
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "action": "remove", "name": name,
+                    "cast": streamCast})}]}))
+                else:
+                  mcpSend(mcpError(id, -32000, "character not in cast: " & name))
+              else:
+                mcpSend(mcpError(id, -32000, "unknown action: " & action & " (use add or remove)"))
 
           elif toolName == "stream_analyze":
             let filePath = toolArgs["file"].getStr()

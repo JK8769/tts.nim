@@ -18,6 +18,7 @@ type WSMessage =
   | { type: "scene"; entry: LiveEntry; scriptLine?: ScriptLine }
   | { type: "music"; action: string; url?: string; volume?: number; loop?: boolean; fade_ms?: number; start_at?: number }
   | { type: "sfx"; url: string; volume?: number }
+  | { type: "cast"; cast: Record<string, string> }
   | { type: "stop" };
 
 const emptyHeader: ScriptData["header"] = {
@@ -542,6 +543,13 @@ export const LiveApp: React.FC = () => {
         setActiveSpeaker("");
         setSubtitle(null);
         break;
+
+      case "cast": {
+        const newCast = msg.cast;
+        setCast(Object.keys(newCast));
+        setHeader((prev) => ({ ...prev, cast: newCast }));
+        break;
+      }
 
       case "line":
       case "scene": {

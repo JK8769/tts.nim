@@ -205,6 +205,13 @@ const server = Bun.serve({
           });
           return new Response(JSON.stringify({ ok: true }));
 
+        case "cast":
+          broadcast({
+            type: "cast",
+            cast: body.cast,
+          });
+          return new Response(JSON.stringify({ ok: true }));
+
         case "stop":
           broadcast({ type: "stop" });
           return new Response(JSON.stringify({ ok: true }));
