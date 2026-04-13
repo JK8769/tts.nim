@@ -236,15 +236,10 @@ proc buildMlx() =
 after install:
   # Clean up old nimble package versions to prevent disk bloat.
   # Each install copies ~4 GB (models, libs). Without cleanup, 8 installs = 35 GB.
-  let nimbleDir = getHomeDir() & ".nimble/pkgs2"
-  let thisHash = thisDir().split("tts-")[^1]  # current install's hash suffix
-  if dirExists(nimbleDir):
-    for kind, path in walkDir(nimbleDir):
-      if kind == pcDir:
-        let name = path.splitPath().tail
-        if name.startsWith("tts-") and not path.endsWith(thisHash):
-          echo "Removing old tts install: ", name
-          rmDir path
+  let current = thisDir()
+  exec "cd $HOME/.nimble/pkgs2 && for d in tts-*/; do " &
+    "d=${d%/}; if [ \"$HOME/.nimble/pkgs2/$d\" != \"" & current & "\" ]; then " &
+    "echo \"Removing old tts install: $d\"; rm -rf \"$d\"; fi; done"
 
 before install:
   ensureSubmodules()
