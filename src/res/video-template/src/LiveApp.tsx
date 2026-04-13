@@ -502,6 +502,7 @@ export const LiveApp: React.FC = () => {
 
   audioQueue.current.onStart = (url) => {
     const entry = timelineRef.current.find((e) => e.audioUrl === url);
+
     if (entry) {
       subtitleGen.current++;
       setActiveSpeaker(entry.name);
@@ -511,15 +512,18 @@ export const LiveApp: React.FC = () => {
   };
 
   audioQueue.current.onEnd = () => {
+
     subtitleGen.current++;
     setSubtitle(null);
   };
 
   audioQueue.current.onSpeechStart = () => {
+
     musicPlayer.current?.duck();
   };
 
   audioQueue.current.onSpeechEnd = () => {
+
     musicPlayer.current?.unduck();
   };
 
@@ -527,8 +531,10 @@ export const LiveApp: React.FC = () => {
 
   function applyMessage(msg: WSMessage) {
     const isReplay = replayingRef.current;
+
     switch (msg.type) {
       case "init":
+
         setHeader(msg.header);
         const names = Object.keys(msg.header.cast || {});
         setCast(names);
@@ -542,8 +548,8 @@ export const LiveApp: React.FC = () => {
         const entry = msg.entry;
         timelineRef.current.push(entry);
         if (entry.mood) setMood(entry.mood);
+
         if (isReplay) {
-          // During replay, just track state — don't queue old audio
           break;
         }
         if (entry.audioUrl) {
@@ -558,6 +564,7 @@ export const LiveApp: React.FC = () => {
       }
 
       case "chapter": {
+
         const gen = ++subtitleGen.current;
         setSubtitle({ name: "", text: msg.text });
         setTimeout(() => { if (subtitleGen.current === gen) setSubtitle(null); }, 2000);
@@ -565,7 +572,7 @@ export const LiveApp: React.FC = () => {
       }
 
       case "music": {
-        if (isReplay) break; // Don't replay old music commands
+        if (isReplay) break;
         audioQueue.current.ensure();
         if (!musicPlayer.current && audioQueue.current.ctx) {
           musicPlayer.current = new MusicPlayer(audioQueue.current.ctx);
@@ -589,7 +596,7 @@ export const LiveApp: React.FC = () => {
       }
 
       case "sfx": {
-        if (isReplay) break; // Don't replay old SFX
+        if (isReplay) break;
         audioQueue.current.ensure();
         if (audioQueue.current.ctx) {
           const sfx = new SfxPlayer(audioQueue.current.ctx);
