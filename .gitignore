@@ -39,3 +39,5 @@ src/res/video-template/public/audio.mp3
 src/res/video-template/src/data.json
 src/res/video-template/bun.lock
 src/res/video-template/bun.lockb
+src/res/video-template/.live-build/
+.playwright-cli/

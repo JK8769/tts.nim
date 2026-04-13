@@ -7,7 +7,7 @@
 ##   tts_cli serve       # MCP stdio server for AI agents
 ##   tts_cli models
 
-import std/[os, strutils, strformat, sequtils, json, algorithm, terminal, times, posix, math, osproc, tables]
+import std/[os, strutils, strformat, sequtils, json, algorithm, terminal, times, posix, math, osproc, tables, httpclient, net]
 import tts/common
 import tts/engine
 import tts/audio/device
@@ -676,6 +676,66 @@ when isMainModule:
 
     var cvEnergyThreshold: float32 = 0.02
 
+    # ---- Live streaming state ----
+    var streamProc: Process = nil
+    var streamPort = 3333
+    var streamAudioDir = ""
+    var streamTimeCursor: float = 0.0
+    var streamLineIndex = 0
+    var streamCast: JsonNode = nil
+    var streamDefModel = ""
+    var streamDefSpeed: float32 = 1.0
+    var streamDefPause: float = 0.3
+    var streamDefNarrator = ""
+    let streamStateFile = getTempDir() / "tts-stream-state.json"
+
+    proc saveStreamState() =
+      let state = %*{
+        "port": streamPort,
+        "audioDir": streamAudioDir,
+        "timeCursor": streamTimeCursor,
+        "lineIndex": streamLineIndex,
+        "cast": if streamCast != nil: streamCast else: newJObject(),
+        "defModel": streamDefModel,
+        "defSpeed": streamDefSpeed,
+        "defPause": streamDefPause,
+        "defNarrator": streamDefNarrator}
+      writeFile(streamStateFile, $state)
+
+    proc loadStreamState(): bool =
+      if not fileExists(streamStateFile): return false
+      try:
+        let state = parseJson(readFile(streamStateFile))
+        streamPort = state["port"].getInt(3333)
+        streamAudioDir = state["audioDir"].getStr("")
+        streamTimeCursor = state["timeCursor"].getFloat(0.0)
+        streamLineIndex = state["lineIndex"].getInt(0)
+        streamCast = state["cast"]
+        streamDefModel = state["defModel"].getStr("")
+        streamDefSpeed = state["defSpeed"].getFloat(1.0).float32
+        streamDefPause = state["defPause"].getFloat(0.3)
+        streamDefNarrator = state["defNarrator"].getStr("")
+        return true
+      except:
+        return false
+
+    proc clearStreamState() =
+      if fileExists(streamStateFile):
+        removeFile(streamStateFile)
+
+    proc streamPost(endpoint: string, body: JsonNode): bool =
+      let client = newHttpClient(timeout = 5000)
+      try:
+        let url = "http://localhost:" & $streamPort & "/api/" & endpoint
+        let resp = client.request(url, httpMethod = HttpPost,
+          body = $body,
+          headers = newHttpHeaders({"Content-Type": "application/json"}))
+        return resp.code == Http200
+      except:
+        return false
+      finally:
+        client.close()
+
     const calibrationPath = pkgRoot / "res" / "calibration.json"
 
     proc saveCalibration() =
@@ -1095,6 +1155,51 @@ when isMainModule:
            "theme": {"type": "string", "description": "[video] Visual theme: radio, storybook, podcast", "default": "radio"},
            "concurrency": {"type": "integer", "description": "[video] Render concurrency (default 8)", "default": 8},
            "frames": {"type": "string", "description": "[video] Frame range e.g. '0-900' for partial render"}}}}
+      ,{"name": "stream_start", "description": "Start a live radio studio stream. Launches a browser-based Remotion Player with real-time visuals (morphing orb, speaker panels, subtitles). Use stream_send to feed lines. Capture the browser window with OBS for RTMP streaming.",
+       "inputSchema": {"type": "object", "required": ["title", "cast"],
+         "properties": {
+           "title": {"type": "string", "description": "Show title displayed on screen"},
+           "cast": {"type": "object", "description": "Character name → voice ID map (e.g. {\"Alice\": \"af_heart\"})"},
+           "defaults": {"type": "object", "description": "Optional defaults: model, speed, pause, narrator_voice"},
+           "port": {"type": "integer", "description": "Server port", "default": 3333}}}}
+      ,{"name": "stream_send", "description": "Send a line to the live stream. Synthesizes audio and pushes it to the browser player in real-time. Supports all line types: line (dialogue), scene, chapter, pause, narration.",
+       "inputSchema": {"type": "object", "required": ["type"],
+         "properties": {
+           "type": {"type": "string", "description": "line, scene, chapter, pause, narration"},
+           "name": {"type": "string", "description": "Character name (resolved from cast)"},
+           "text": {"type": "string", "description": "Text to speak / scene description / chapter title"},
+           "voice": {"type": "string", "description": "Voice ID override"},
+           "model": {"type": "string", "description": "Model override"},
+           "speed": {"type": "number", "description": "Speed override"},
+           "pause": {"type": "number", "description": "Silence after line (seconds)"},
+           "mood": {"type": "string", "description": "[scene] Mood for visuals (warm, cool, excited, etc.)"},
+           "narrate": {"type": "boolean", "description": "[scene] Whether to narrate the scene text"},
+           "setting": {"type": "string", "description": "[scene] Location/environment"},
+           "characters": {"type": "array", "description": "[scene] Characters present", "items": {"type": "string"}},
+           "duration": {"type": "number", "description": "[pause] Silence duration in seconds"}}}}
+      ,{"name": "stream_music", "description": "Control background music on the live stream. Supports play (from file or URL), volume (adjust without restarting), stop, and fade_out. Music auto-ducks when someone is speaking.",
+       "inputSchema": {"type": "object", "required": ["action"],
+         "properties": {
+           "action": {"type": "string", "description": "play, volume, queue, next, stop, fade_out"},
+           "start_at": {"type": "number", "description": "[play] Start position in seconds (default 0)", "default": 0},
+           "file": {"type": "string", "description": "[play] Path to local audio file (MP3/WAV/OGG)"},
+           "url": {"type": "string", "description": "[play] URL to download audio from (MP3/WAV/OGG)"},
+           "volume": {"type": "number", "description": "[play] Volume 0.0-1.0 (default 0.3)", "default": 0.3},
+           "loop": {"type": "boolean", "description": "[play] Loop the music (default true)", "default": true},
+           "fade_ms": {"type": "integer", "description": "Fade duration in ms (default 1000)", "default": 1000}}}}
+      ,{"name": "stream_sfx", "description": "Play a one-shot sound effect on the live stream. Layers on top of music and speech. Good for transition jingles, chimes, etc.",
+       "inputSchema": {"type": "object", "required": ["file"],
+         "properties": {
+           "file": {"type": "string", "description": "Path to audio file (MP3/WAV/OGG)"},
+           "url": {"type": "string", "description": "URL to download audio from"},
+           "volume": {"type": "number", "description": "Volume 0.0-1.0 (default 0.8)", "default": 0.8}}}}
+      ,{"name": "stream_analyze", "description": "Analyze a music file's loudness timeline. Returns per-segment RMS levels so you can time dialogue around quiet/loud sections. Requires ffmpeg.",
+       "inputSchema": {"type": "object", "required": ["file"],
+         "properties": {
+           "file": {"type": "string", "description": "Path to audio file"},
+           "bucket_seconds": {"type": "integer", "description": "Bucket size in seconds (default 5)", "default": 5}}}}
+      ,{"name": "stream_stop", "description": "Stop the live stream. Shuts down the server and browser.",
+       "inputSchema": {"type": "object", "properties": {}}}
     ]
 
     while true:
@@ -2107,6 +2212,450 @@ when isMainModule:
               writeFile(logPath, "")
               mcpLog("info", "log cleared", "log_clear")
             mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $arr}]}))
+          elif toolName == "stream_start":
+            if streamProc != nil and streamProc.running:
+              mcpSend(mcpError(id, -32000, "Stream already running. Call stream_stop first."))
+            else:
+              let title = toolArgs["title"].getStr()
+              streamCast = toolArgs["cast"]
+              let defaults = toolArgs.getOrDefault("defaults")
+              streamPort = toolArgs.getOrDefault("port").getInt(3333)
+
+              # Parse defaults
+              streamDefModel = ""
+              streamDefSpeed = 1.0
+              streamDefPause = 0.3
+              streamDefNarrator = ""
+              if defaults != nil:
+                streamDefModel = defaults.getOrDefault("model").getStr("")
+                streamDefSpeed = defaults.getOrDefault("speed").getFloat(1.0)
+                streamDefPause = defaults.getOrDefault("pause").getFloat(0.3)
+                streamDefNarrator = defaults.getOrDefault("narrator_voice").getStr("")
+
+              # Reset state
+              streamTimeCursor = 1.5  # start after title card
+              streamLineIndex = 0
+
+              # Create audio directory
+              streamAudioDir = getTempDir() / "tts-live-audio"
+              createDir(streamAudioDir)
+
+              # Launch live server
+              let templateDir = pkgRoot / "res" / "video-template"
+              let bunExe = findExe("bun")
+              if bunExe.len == 0:
+                mcpSend(mcpError(id, -32000, "bun not found — install Bun to use live streaming"))
+              else:
+                let serverScript = templateDir / "live-server.ts"
+                streamProc = startProcess(bunExe,
+                  args = @[serverScript, "--port", $streamPort, "--audio-dir", streamAudioDir],
+                  workingDir = templateDir,
+                  options = {poUsePath, poStdErrToStdOut})
+                sleep(2000)  # wait for server to start + bundle
+
+                # Send init message
+                let header = %*{
+                  "type": "header", "title": title, "format": "show",
+                  "cast": streamCast, "defaults": if defaults != nil: defaults else: newJObject()}
+                if streamPost("init", %*{"header": header}):
+                  mcpLog("info", "live stream started on port " & $streamPort, "stream_start",
+                    %*{"port": streamPort, "title": title})
+                  saveStreamState()
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "started": true,
+                    "url": "http://localhost:" & $streamPort,
+                    "port": streamPort,
+                    "title": title,
+                    "cast": streamCast})}]}))
+                else:
+                  if streamProc != nil:
+                    streamProc.terminate()
+                    streamProc = nil
+                  mcpSend(mcpError(id, -32000, "Failed to initialize live server"))
+
+          elif toolName == "stream_send":
+            if (streamProc == nil or not streamProc.running) and not loadStreamState():
+              mcpSend(mcpError(id, -32000, "No active stream — call stream_start first"))
+            else:
+              let lineType = toolArgs.getOrDefault("type").getStr("line")
+              let text = toolArgs.getOrDefault("text").getStr("")
+              let moodVal = toolArgs.getOrDefault("mood").getStr("")
+              let narrate = toolArgs.getOrDefault("narrate").getBool(false)
+              let sr = 24000.0
+
+              if lineType == "chapter":
+                let gap = 1.5
+                discard streamPost("chapter", %*{"text": text, "index": streamLineIndex})
+                streamTimeCursor += gap
+                streamLineIndex += 1
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "sent": true, "type": "chapter", "text": text,
+                  "time": streamTimeCursor})}]}))
+
+              elif lineType == "pause":
+                let dur = toolArgs.getOrDefault("duration").getFloat(1.0)
+                streamTimeCursor += dur
+                streamLineIndex += 1
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "sent": true, "type": "pause", "duration": dur,
+                  "time": streamTimeCursor})}]}))
+
+              elif lineType == "scene":
+                let setting = toolArgs.getOrDefault("setting").getStr("")
+                let characters = toolArgs.getOrDefault("characters")
+
+                if narrate and text.len > 0:
+                  var nVoice = toolArgs.getOrDefault("voice").getStr(streamDefNarrator)
+                  if nVoice.len == 0:
+                    var hasZh = false
+                    if streamCast != nil:
+                      for k, v in streamCast:
+                        if v.getStr("").startsWith("z"):
+                          hasZh = true
+                          break
+                    nVoice = if hasZh: "zf_019" else: "af_sky"
+                  let nModel = resolveModel(toolArgs.getOrDefault("model").getStr(
+                    if streamDefModel.len > 0: streamDefModel
+                    elif nVoice.startsWith("z"): "kokoro-zh"
+                    else: "kokoro-en"))
+                  let nSpeed = toolArgs.getOrDefault("speed").getFloat(streamDefSpeed).float32
+                  let pauseSec = toolArgs.getOrDefault("pause").getFloat(0.8)
+
+                  e.loadModel(nModel, nVoice)
+                  let vp = parseVoice(nVoice)
+                  let audio = e.synthesize(text, vp.voice1, nSpeed)
+                  let dur = audio.samples.len.float / sr
+                  let audioFile = "line_" & $streamLineIndex & ".wav"
+                  audio.writeWav(streamAudioDir / audioFile)
+
+                  let entry = %*{
+                    "index": streamLineIndex, "name": "narrator", "voice": nVoice,
+                    "type": "scene", "start": streamTimeCursor, "duration": dur,
+                    "text": text, "mood": moodVal, "setting": setting,
+                    "audioUrl": "/audio/" & audioFile}
+                  if characters != nil: entry["characters"] = characters
+                  discard streamPost("scene", %*{"entry": entry})
+                  streamTimeCursor += dur + pauseSec
+                else:
+                  let entry = %*{
+                    "index": streamLineIndex, "name": "", "voice": "",
+                    "type": "scene", "start": streamTimeCursor, "duration": 3.0,
+                    "text": text, "mood": moodVal, "setting": setting}
+                  if characters != nil: entry["characters"] = characters
+                  discard streamPost("scene", %*{"entry": entry})
+                  streamTimeCursor += 3.0
+
+                streamLineIndex += 1
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "sent": true, "type": "scene", "text": text[0 ..< min(text.len, 60)],
+                  "time": streamTimeCursor})}]}))
+
+              else:
+                # line or narration
+                if text.len == 0:
+                  mcpSend(mcpError(id, -32000, "text is required for line/narration"))
+                else:
+                  var voiceSpec = toolArgs.getOrDefault("voice").getStr("")
+                  if voiceSpec.len == 0:
+                    let name = toolArgs.getOrDefault("name").getStr("")
+                    if name.len > 0 and streamCast != nil and streamCast.hasKey(name):
+                      voiceSpec = streamCast[name].getStr()
+                    elif lineType == "narration" and streamDefNarrator.len > 0:
+                      voiceSpec = streamDefNarrator
+                    else:
+                      # Pick default voice matching cast language
+                      var hasZh = false
+                      if streamCast != nil:
+                        for k, v in streamCast:
+                          if v.getStr("").startsWith("z"):
+                            hasZh = true
+                            break
+                      voiceSpec = if hasZh: "zf_022" else: "af_heart"
+
+                  let modelName = toolArgs.getOrDefault("model").getStr(
+                    if streamDefModel.len > 0: streamDefModel
+                    elif voiceSpec.startsWith("z"): "kokoro-zh"
+                    else: "kokoro-en")
+                  let speed = toolArgs.getOrDefault("speed").getFloat(streamDefSpeed).float32
+                  let pauseSec = toolArgs.getOrDefault("pause").getFloat(streamDefPause)
+                  let displayName = toolArgs.getOrDefault("name").getStr(voiceSpec)
+
+                  let model = resolveModel(modelName)
+                  e.loadModel(model, voiceSpec)
+                  let vp = parseVoice(voiceSpec)
+                  var voice = vp.voice1
+                  if vp.isMix:
+                    voice = e.mixVoice(vp.voice1, vp.voice2, vp.weight)
+                  let audio = e.synthesize(text, voice, speed)
+                  let dur = audio.samples.len.float / sr
+                  let audioFile = "line_" & $streamLineIndex & ".wav"
+                  audio.writeWav(streamAudioDir / audioFile)
+
+                  let entry = %*{
+                    "index": streamLineIndex, "name": displayName, "voice": voiceSpec,
+                    "type": lineType, "start": streamTimeCursor, "duration": dur,
+                    "text": text, "audioUrl": "/audio/" & audioFile}
+                  if moodVal.len > 0: entry["mood"] = %moodVal
+                  discard streamPost("line", %*{"entry": entry})
+
+                  mcpLog("info", "stream: " & displayName & " dur=" &
+                    dur.formatFloat(ffDecimal, 1) & "s", "stream_line",
+                    %*{"index": streamLineIndex, "name": displayName, "duration": dur})
+
+                  streamTimeCursor += dur + pauseSec
+                  streamLineIndex += 1
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "sent": true, "type": lineType, "name": displayName,
+                    "voice": voiceSpec, "duration": dur.formatFloat(ffDecimal, 2).parseFloat,
+                    "time": streamTimeCursor.formatFloat(ffDecimal, 2).parseFloat})}]}))
+
+          elif toolName == "stream_music":
+            if (streamProc == nil or not streamProc.running) and not loadStreamState():
+              mcpSend(mcpError(id, -32000, "No active stream — call stream_start first"))
+            else:
+              let action = toolArgs["action"].getStr()
+              if action == "play":
+                let filePath = toolArgs.getOrDefault("file").getStr("")
+                let urlPath = toolArgs.getOrDefault("url").getStr("")
+                var musicFile = ""
+                var musicErr = ""
+                block resolveMusic:
+                  if urlPath.len > 0:
+                    let ext = if urlPath.contains(".mp3"): ".mp3"
+                              elif urlPath.contains(".ogg"): ".ogg"
+                              elif urlPath.contains(".wav"): ".wav"
+                              else: ".mp3"
+                    musicFile = "music_download" & ext
+                    let dest = streamAudioDir / musicFile
+                    let client = newHttpClient(timeout = 30000)
+                    try:
+                      client.downloadFile(urlPath, dest)
+                    except:
+                      musicErr = "Failed to download: " & urlPath
+                    finally:
+                      client.close()
+                  elif filePath.len > 0:
+                    if not fileExists(filePath):
+                      musicErr = "file not found: " & filePath
+                    else:
+                      let ext2 = splitFile(filePath).ext
+                      musicFile = "music_local" & ext2
+                      copyFile(filePath, streamAudioDir / musicFile)
+                  else:
+                    musicErr = "file or url is required for play action"
+                if musicErr.len > 0:
+                  mcpSend(mcpError(id, -32000, musicErr))
+                else:
+                  let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
+                  let loop = toolArgs.getOrDefault("loop").getBool(true)
+                  let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(1000)
+                  let startAt = toolArgs.getOrDefault("start_at").getFloat(0.0)
+                  discard streamPost("music", %*{
+                    "action": "play",
+                    "url": "/audio/" & musicFile,
+                    "volume": volume,
+                    "loop": loop,
+                    "fade_ms": fadeMs,
+                    "start_at": startAt})
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "playing": true, "file": musicFile, "volume": volume, "loop": loop})}]}))
+              elif action == "queue":
+                let filePath = toolArgs.getOrDefault("file").getStr("")
+                let urlPath = toolArgs.getOrDefault("url").getStr("")
+                var musicFile = ""
+                var musicErr = ""
+                if urlPath.len > 0:
+                  let ext = if urlPath.contains(".mp3"): ".mp3"
+                            elif urlPath.contains(".ogg"): ".ogg"
+                            elif urlPath.contains(".wav"): ".wav"
+                            else: ".mp3"
+                  musicFile = "music_queue_" & $streamLineIndex & ext
+                  let dest = streamAudioDir / musicFile
+                  let client = newHttpClient(timeout = 30000)
+                  try:
+                    client.downloadFile(urlPath, dest)
+                  except:
+                    musicErr = "Failed to download: " & urlPath
+                  finally:
+                    client.close()
+                elif filePath.len > 0:
+                  if not fileExists(filePath):
+                    musicErr = "file not found: " & filePath
+                  else:
+                    let ext2 = splitFile(filePath).ext
+                    musicFile = "music_queue_" & $streamLineIndex & ext2
+                    copyFile(filePath, streamAudioDir / musicFile)
+                else:
+                  musicErr = "file or url is required for queue action"
+                if musicErr.len > 0:
+                  mcpSend(mcpError(id, -32000, musicErr))
+                else:
+                  let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
+                  let loop = toolArgs.getOrDefault("loop").getBool(false)
+                  discard streamPost("music", %*{
+                    "action": "queue",
+                    "url": "/audio/" & musicFile,
+                    "volume": volume,
+                    "loop": loop})
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "queued": true, "file": musicFile})}]}))
+              elif action == "next":
+                let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(2000)
+                discard streamPost("music", %*{
+                  "action": "next",
+                  "fade_ms": fadeMs})
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "action": "next", "fade_ms": fadeMs})}]}))
+              elif action == "volume":
+                let volume = toolArgs.getOrDefault("volume").getFloat(0.3)
+                let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(1000)
+                discard streamPost("music", %*{
+                  "action": "volume",
+                  "volume": volume,
+                  "fade_ms": fadeMs})
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "action": "volume", "volume": volume, "fade_ms": fadeMs})}]}))
+              elif action == "stop" or action == "fade_out":
+                let fadeMs = toolArgs.getOrDefault("fade_ms").getInt(
+                  if action == "fade_out": 2000 else: 1000)
+                discard streamPost("music", %*{
+                  "action": action,
+                  "fade_ms": fadeMs})
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "action": action, "fade_ms": fadeMs})}]}))
+              else:
+                mcpSend(mcpError(id, -32000, "unknown music action: " & action))
+
+          elif toolName == "stream_sfx":
+            if (streamProc == nil or not streamProc.running) and not loadStreamState():
+              mcpSend(mcpError(id, -32000, "No active stream — call stream_start first"))
+            else:
+              let filePath = toolArgs.getOrDefault("file").getStr("")
+              let urlPath = toolArgs.getOrDefault("url").getStr("")
+              let volume = toolArgs.getOrDefault("volume").getFloat(0.8)
+              var sfxFile = ""
+              var sfxErr = ""
+              if urlPath.len > 0:
+                let ext = if urlPath.contains(".mp3"): ".mp3"
+                          elif urlPath.contains(".ogg"): ".ogg"
+                          elif urlPath.contains(".wav"): ".wav"
+                          else: ".mp3"
+                sfxFile = "sfx_" & $streamLineIndex & ext
+                let dest = streamAudioDir / sfxFile
+                let client = newHttpClient(timeout = 30000)
+                try:
+                  client.downloadFile(urlPath, dest)
+                except:
+                  sfxErr = "Failed to download: " & urlPath
+                finally:
+                  client.close()
+              elif filePath.len > 0:
+                if not fileExists(filePath):
+                  sfxErr = "file not found: " & filePath
+                else:
+                  let ext2 = splitFile(filePath).ext
+                  sfxFile = "sfx_" & $streamLineIndex & ext2
+                  copyFile(filePath, streamAudioDir / sfxFile)
+              else:
+                sfxErr = "file or url is required"
+              if sfxErr.len > 0:
+                mcpSend(mcpError(id, -32000, sfxErr))
+              else:
+                discard streamPost("sfx", %*{
+                  "url": "/audio/" & sfxFile,
+                  "volume": volume})
+                mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                  "played": true, "file": sfxFile, "volume": volume})}]}))
+
+          elif toolName == "stream_analyze":
+            let filePath = toolArgs["file"].getStr()
+            if not fileExists(filePath):
+              mcpSend(mcpError(id, -32000, "file not found: " & filePath))
+            else:
+              let bucketSec = toolArgs.getOrDefault("bucket_seconds").getInt(5)
+              let ffmpeg = findExe("ffmpeg")
+              if ffmpeg.len == 0:
+                mcpSend(mcpError(id, -32000, "ffmpeg not found in PATH"))
+              else:
+                let tmpFile = getTempDir() / "tts_rms_analysis.txt"
+                let cmd = ffmpeg & " -i " & quoteShell(filePath) &
+                  " -af \"astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=" &
+                  tmpFile & "\" -f null - 2>/dev/null"
+                let exitCode = execCmd(cmd)
+                if exitCode != 0 or not fileExists(tmpFile):
+                  mcpSend(mcpError(id, -32000, "ffmpeg analysis failed"))
+                else:
+                  # Parse RMS data into buckets
+                  var buckets: seq[tuple[time: int, rms: float, count: int]] = @[]
+                  var curTime = 0.0
+                  for line in tmpFile.lines:
+                    if line.startsWith("frame:"):
+                      let parts = line.split("pts_time:")
+                      if parts.len > 1:
+                        try: curTime = parseFloat(parts[1].strip())
+                        except: discard
+                    elif line.contains("RMS_level="):
+                      let parts = line.split("RMS_level=")
+                      if parts.len > 1:
+                        let valStr = parts[1].strip()
+                        if "inf" notin valStr:
+                          try:
+                            let rms = parseFloat(valStr)
+                            let bucket = int(curTime / bucketSec.float) * bucketSec
+                            # Find or create bucket
+                            var found = false
+                            for b in buckets.mitems:
+                              if b.time == bucket:
+                                b.rms += rms
+                                b.count += 1
+                                found = true
+                                break
+                            if not found:
+                              buckets.add (time: bucket, rms: rms, count: 1)
+                          except: discard
+                  removeFile(tmpFile)
+                  # Build result
+                  var segments = newJArray()
+                  var maxRms = -999.0
+                  for b in buckets:
+                    let avg = b.rms / b.count.float
+                    if avg > maxRms: maxRms = avg
+                  for b in buckets:
+                    let avg = b.rms / b.count.float
+                    let label = if avg > maxRms - 3: "loud"
+                                elif avg > maxRms - 10: "medium"
+                                else: "quiet"
+                    segments.add %*{
+                      "time": b.time,
+                      "end": b.time + bucketSec,
+                      "rms_db": avg.formatFloat(ffDecimal, 1).parseFloat,
+                      "level": label}
+                  # Get duration
+                  let ffprobe = findExe("ffprobe")
+                  var duration = 0.0
+                  if ffprobe.len > 0:
+                    let (output, _) = execCmdEx(ffprobe & " -v quiet -show_entries format=duration -of csv=p=0 " & quoteShell(filePath))
+                    try: duration = parseFloat(output.strip())
+                    except: discard
+                  mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+                    "file": filePath,
+                    "duration": duration.formatFloat(ffDecimal, 1).parseFloat,
+                    "bucket_seconds": bucketSec,
+                    "segments": segments})}]}))
+
+          elif toolName == "stream_stop":
+            if streamProc != nil:
+              discard streamPost("stop", %*{})
+              sleep(500)
+              streamProc.terminate()
+              streamProc = nil
+              if streamAudioDir.len > 0 and dirExists(streamAudioDir):
+                removeDir(streamAudioDir)
+              mcpLog("info", "live stream stopped", "stream_stop")
+              clearStreamState()
+            mcpSend(mcpResult(id, %*{"content": [{"type": "text", "text": $(%*{
+              "stopped": true})}]}))
+
           else:
             mcpSend(mcpError(id, -32601, "unknown tool: " & toolName))
         except CatchableError as ex:

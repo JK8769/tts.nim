@@ -12,7 +12,8 @@
     "@remotion/player": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "remotion": "^4.0.0"
+    "remotion": "^4.0.0",
+    "styled-components": "^6.4.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

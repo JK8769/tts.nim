@@ -1,5 +1,5 @@
-import { AbsoluteFill, Audio, Sequence, staticFile } from "remotion";
-import type { ScriptData } from "./types";
+import { AbsoluteFill, Sequence, useCurrentFrame, useVideoConfig } from "remotion";
+import type { ScriptData, TimelineEntry } from "./types";
 import { RadioStudio } from "./RadioStudio";
 import { DialogueSubtitle } from "./DialogueSubtitle";
 import { ChapterTitle } from "./ChapterTitle";
@@ -7,8 +7,25 @@ import { SceneCard } from "./SceneCard";
 
 const FPS = 30;
 
-export const Storybook: React.FC<{
-  data: ScriptData;
+/** Timeline entry with its own audio URL (for live streaming). */
+export interface LiveEntry extends TimelineEntry {
+  audioUrl?: string;
+}
+
+export interface LiveData {
+  header: ScriptData["header"];
+  lines: ScriptData["lines"];
+  timeline: LiveEntry[];
+  audioDuration: number;
+}
+
+/**
+ * Live version of Storybook — each line has its own audio track
+ * instead of a single pre-rendered audio.mp3.
+ * Used by the Remotion Player for real-time streaming.
+ */
+export const LiveStorybook: React.FC<{
+  data: LiveData;
 }> = ({ data }) => {
   if (!data) return null;
   const { header, lines, timeline, audioDuration } = data;
@@ -28,11 +45,10 @@ export const Storybook: React.FC<{
 
   return (
     <AbsoluteFill>
-      {/* Radio studio background with speaker panels + equalizer */}
-      <RadioStudio timeline={timeline ?? []} title={header?.title ?? ""} audioSrc={staticFile("audio.mp3")} />
+      {/* Radio studio background — no equalizer in live mode */}
+      <RadioStudio timeline={timeline ?? []} title={header?.title ?? ""} />
 
-      {/* Audio track */}
-      <Audio src={staticFile("audio.mp3")} />
+      {/* Audio is played externally via Web Audio API — not through Remotion */}
 
       {/* Title card */}
       <Sequence from={0} durationInFrames={45}>

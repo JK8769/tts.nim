@@ -243,7 +243,8 @@ const ShowTitle: React.FC<{ title: string }> = ({ title }) => {
 export const RadioStudio: React.FC<{
   timeline: TimelineEntry[];
   title: string;
-}> = ({ timeline, title }) => {
+  audioSrc?: string;
+}> = ({ timeline, title, audioSrc }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   const timeSec = frame / fps;
@@ -312,8 +313,8 @@ export const RadioStudio: React.FC<{
         }}
       />
 
-      {/* Equalizer */}
-      <Equalizer audioSrc={staticFile("audio.mp3")} speakerColor={activeColor} />
+      {/* Equalizer — only when audio source is available */}
+      {audioSrc && <Equalizer audioSrc={audioSrc} speakerColor={activeColor} />}
     </AbsoluteFill>
   );
 };
